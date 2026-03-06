@@ -1,5 +1,3 @@
-
-# Create your models here.
 from django.conf import settings
 from django.db import models
 from django.core.validators import MinValueValidator
@@ -46,6 +44,9 @@ class Connection(models.Model):
         self.status = "DECLINED"
         self.responded_at = timezone.now()
         self.save(update_fields=["status", "responded_at"])
+
+    def __str__(self):
+        return f"{self.inviter} -> {self.invitee} ({self.status})"
 
 
 # ------------------------------------------------------------
@@ -97,7 +98,7 @@ class Goal(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self):
-        return f"{self.title}"
+        return self.title
 
 
 # ------------------------------------------------------------
@@ -125,6 +126,19 @@ class GoalAssignment(models.Model):
 
     class Meta:
         unique_together = [("goal", "buddy")]
+
+    def accept(self):
+        self.consent_status = "ACCEPTED"
+        self.responded_at = timezone.now()
+        self.save(update_fields=["consent_status", "responded_at"])
+
+    def decline(self):
+        self.consent_status = "DECLINED"
+        self.responded_at = timezone.now()
+        self.save(update_fields=["consent_status", "responded_at"])
+
+    def __str__(self):
+        return f"{self.buddy} assigned to {self.goal} ({self.consent_status})"
 
 
 # ------------------------------------------------------------
@@ -172,6 +186,23 @@ class CheckIn(models.Model):
             models.Index(fields=["created_by", "created_at"]),
         ]
 
+    def approve(self, verifier):
+        self.status = "APPROVED"
+        self.verified_by = verifier
+        self.verified_at = timezone.now()
+        self.rejection_reason = ""
+        self.save(update_fields=["status", "verified_by", "verified_at", "rejection_reason"])
+
+    def reject(self, verifier, reason=""):
+        self.status = "REJECTED"
+        self.verified_by = verifier
+        self.verified_at = timezone.now()
+        self.rejection_reason = reason
+        self.save(update_fields=["status", "verified_by", "verified_at", "rejection_reason"])
+
+    def __str__(self):
+        return f"{self.goal} - {self.created_by} ({self.status})"
+
 
 # ------------------------------------------------------------
 # FEATURE AREA 6: Comments + encouragement (Individual)
@@ -204,6 +235,9 @@ class Comment(models.Model):
             models.Index(fields=["author", "created_at"]),
         ]
 
+    def __str__(self):
+        return f"{self.author} on {self.goal}"
+
 
 # ------------------------------------------------------------
 # FEATURE AREA 8: Notifications + nudges (in-app)
@@ -212,15 +246,13 @@ class Comment(models.Model):
 NOTIF_TYPE = [
     ("CONNECTION_INVITE", "Connection invite"),
     ("CONNECTION_ACCEPTED", "Connection accepted"),
-
     ("GOAL_ASSIGNMENT_REQUEST", "Goal assignment request"),
     ("GOAL_ASSIGNMENT_ACCEPTED", "Goal assignment accepted"),
-
     ("CHECKIN_SUBMITTED", "Check-in submitted"),
     ("CHECKIN_APPROVED", "Check-in approved"),
     ("CHECKIN_REJECTED", "Check-in rejected"),
 
-    # Pod-related notifications (still uses one Notification table)
+    # Pod-related notifications
     ("POD_INVITE", "Pod invite"),
     ("POD_MEMBER_JOINED", "Pod member joined"),
     ("POD_GOAL_CREATED", "Pod goal created"),
@@ -257,6 +289,9 @@ class Notification(models.Model):
             models.Index(fields=["recipient", "is_read", "created_at"]),
         ]
 
+    def __str__(self):
+        return f"{self.recipient} - {self.notif_type}"
+
 
 # ------------------------------------------------------------
 # POD MODEL (for groups)
@@ -287,6 +322,7 @@ POD_ROLE = [
 MEMBERSHIP_STATUS = [
     ("INVITED", "Invited"),
     ("ACTIVE", "Active"),
+    ("DECLINED", "Declined"),
     ("LEFT", "Left"),
     ("REMOVED", "Removed"),
 ]
@@ -312,13 +348,18 @@ class PodMembership(models.Model):
             models.Index(fields=["user", "status"]),
         ]
 
-    def __str__(self):
-        return f"{self.user} in {self.pod} ({self.status})"
-
     def accept(self):
         self.status = "ACTIVE"
         self.responded_at = timezone.now()
         self.save(update_fields=["status", "responded_at"])
+
+    def decline(self):
+        self.status = "DECLINED"
+        self.responded_at = timezone.now()
+        self.save(update_fields=["status", "responded_at"])
+
+    def __str__(self):
+        return f"{self.user} in {self.pod} ({self.status})"
 
 
 # ------------------------------------------------------------
@@ -386,6 +427,23 @@ class PodCheckIn(models.Model):
             models.Index(fields=["created_by", "created_at"]),
         ]
 
+    def approve(self, verifier):
+        self.status = "APPROVED"
+        self.verified_by = verifier
+        self.verified_at = timezone.now()
+        self.rejection_reason = ""
+        self.save(update_fields=["status", "verified_by", "verified_at", "rejection_reason"])
+
+    def reject(self, verifier, reason=""):
+        self.status = "REJECTED"
+        self.verified_by = verifier
+        self.verified_at = timezone.now()
+        self.rejection_reason = reason
+        self.save(update_fields=["status", "verified_by", "verified_at", "rejection_reason"])
+
+    def __str__(self):
+        return f"{self.pod_goal} - {self.created_by} ({self.status})"
+
     """
     IMPORTANT RULE (enforced in API logic, not DB):
       - verifier must be an ACTIVE member of pod_goal.pod
@@ -412,6 +470,9 @@ class PodComment(models.Model):
             models.Index(fields=["pod_goal", "created_at"]),
             models.Index(fields=["author", "created_at"]),
         ]
+
+    def __str__(self):
+        return f"{self.author} on {self.pod_goal}"
 
 
 # ============================================================

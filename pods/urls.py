@@ -1,21 +1,19 @@
-from django.urls import path, include
-from rest_framework.authtoken.views import obtain_auth_token
+from django.urls import path
 
 from .views import (
     PodListCreateView, PodDetailView,
     PodMembershipListCreateView, PodMembershipAcceptView,
     PodGoalListCreateView,
-    PodCheckInListCreateView, PodCheckInApproveView, PodCheckInRejectView,
+    PodCheckInListCreateView, PodCheckInApproveView, PodCheckInRejectView, PodMembershipDeclineView, 
+    ConnectionListCreateView, ConnectionAcceptView, ConnectionDeclineView,
 )
 
 urlpatterns = [
-    # Auth
-    path("api/auth/token/", obtain_auth_token),
-    path("api/", include("pods.urls")),
 
     # Pods
     path("pods/", PodListCreateView.as_view()),
     path("pods/<int:pod_id>/", PodDetailView.as_view()),
+    path("pod-memberships/<int:membership_id>/decline/", PodMembershipDeclineView.as_view(), name="pod-membership-decline"),
 
     # Memberships
     path("pod-memberships/", PodMembershipListCreateView.as_view()),
@@ -28,4 +26,9 @@ urlpatterns = [
     path("pod-checkins/", PodCheckInListCreateView.as_view()),
     path("pod-checkins/<int:checkin_id>/approve/", PodCheckInApproveView.as_view()),
     path("pod-checkins/<int:checkin_id>/reject/", PodCheckInRejectView.as_view()),
+
+    # Connections
+    path("connections/", ConnectionListCreateView.as_view(), name="connection-list-create"),
+    path("connections/<int:connection_id>/accept/", ConnectionAcceptView.as_view(), name="connection-accept"),
+    path("connections/<int:connection_id>/decline/", ConnectionDeclineView.as_view(), name="connection-decline"),
 ]
