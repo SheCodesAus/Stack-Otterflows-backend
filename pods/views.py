@@ -7,8 +7,17 @@ from django.shortcuts import get_object_or_404
 from django.db.models import Q
 
 from .models import (
-Pod, PodMembership, PodGoal, PodCheckIn, Connection,
-Goal, GoalAssignment, CheckIn, Comment, PodComment)
+    Pod,
+    PodMembership,
+    PodGoal,
+    PodCheckIn,
+    Connection,
+    Goal,
+    GoalAssignment,
+    CheckIn,
+    Comment,
+    PodComment,
+)
 
 from .serializers import (
     PodSerializer,
@@ -16,15 +25,24 @@ from .serializers import (
     PodGoalSerializer,
     PodCheckInSerializer,
     ConnectionSerializer,
-    GoalSerializer, GoalAssignmentSerializer, CheckInSerializer, CommentSerializer, PodCommentSerializer,
+    GoalSerializer,
+    GoalAssignmentSerializer,
+    CheckInSerializer,
+    CommentSerializer,
+    PodCommentSerializer,
 )
-from .permissions import ( 
+
+from .permissions import (
     is_active_member,
     is_goal_owner,
-    is_accepted_goal_buddy,
     can_view_goal,
-    can_verify_individual_checkin, )
+    can_verify_individual_checkin,
+)
 
+
+# ------------------------------------------------------------
+# INDIVIDUAL GOALS
+# ------------------------------------------------------------
 
 class GoalListCreateView(APIView):
     """
@@ -47,7 +65,9 @@ class GoalListCreateView(APIView):
 
 class GoalDetailView(APIView):
     """
-    GET /api/goals/<goal_id>/ -> retrieve one goal
+    GET    /api/goals/<goal_id>/   -> retrieve one goal
+    PATCH  /api/goals/<goal_id>/   -> update one goal (owner only)
+    DELETE /api/goals/<goal_id>/   -> delete one goal (owner only)
     """
     permission_classes = [IsAuthenticated]
 
@@ -62,6 +82,37 @@ class GoalDetailView(APIView):
 
         return Response(GoalSerializer(goal).data)
 
+    def patch(self, request, goal_id):
+        goal = get_object_or_404(Goal, id=goal_id)
+
+        if not is_goal_owner(request.user, goal):
+            return Response(
+                {"detail": "Only the goal owner can update this goal."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        serializer = GoalSerializer(goal, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+
+        return Response(serializer.data)
+
+    def delete(self, request, goal_id):
+        goal = get_object_or_404(Goal, id=goal_id)
+
+        if not is_goal_owner(request.user, goal):
+            return Response(
+                {"detail": "Only the goal owner can delete this goal."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        goal.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+# ------------------------------------------------------------
+# GOAL ASSIGNMENTS
+# ------------------------------------------------------------
 
 class GoalAssignmentListCreateView(APIView):
     """
@@ -132,6 +183,9 @@ class GoalAssignmentListCreateView(APIView):
 
 
 class GoalAssignmentAcceptView(APIView):
+    """
+    POST /api/goal-assignments/<assignment_id>/accept/
+    """
     permission_classes = [IsAuthenticated]
 
     def post(self, request, assignment_id):
@@ -154,6 +208,9 @@ class GoalAssignmentAcceptView(APIView):
 
 
 class GoalAssignmentDeclineView(APIView):
+    """
+    POST /api/goal-assignments/<assignment_id>/decline/
+    """
     permission_classes = [IsAuthenticated]
 
     def post(self, request, assignment_id):
@@ -174,10 +231,248 @@ class GoalAssignmentDeclineView(APIView):
         assignment.decline()
         return Response({"detail": "Assignment declined."})
 
+
+# ------------------------------------------------------------
+# INDIVIDUAL CHECK-INS
+# ------------------------------------------------------------
+
+class CheckInListCreateView(APIView):
+    """
+    GET  /api/checkins/?goal=<goal_id>
+    POST /api/checkins/
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        goal_id = request.query_params.get("goal")
+        if not goal_id:
+            return Response(
+                {"detail": "Provide ?goal=<goal_id>"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        goal = get_object_or_404(Goal, id=goal_id)
+
+        if not can_view_goal(request.user, goal):
+            return Response(
+                {"detail": "You do not have permission to view this goal's check-ins."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        checkins = CheckIn.objects.filter(goal=goal).order_by("-created_at")
+        return Response(CheckInSerializer(checkins, many=True).data)
+
+    def post(self, request):
+        serializer = CheckInSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        goal = serializer.validated_data["goal"]
+
+        if not is_goal_owner(request.user, goal):
+            return Response(
+                {"detail": "Only the goal owner can create check-ins."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        checkin = serializer.save(created_by=request.user)
+        return Response(CheckInSerializer(checkin).data, status=status.HTTP_201_CREATED)
+
+
+class CheckInApproveView(APIView):
+    """
+    POST /api/checkins/<checkin_id>/approve/
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, checkin_id):
+        checkin = get_object_or_404(CheckIn, id=checkin_id)
+
+        if not can_verify_individual_checkin(request.user, checkin):
+            return Response(
+                {"detail": "You do not have permission to approve this check-in."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        if checkin.status != "PENDING":
+            return Response(
+                {"detail": "Only pending check-ins can be approved."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        checkin.approve(request.user)
+        return Response({"detail": "Approved."})
+
+
+class CheckInRejectView(APIView):
+    """
+    POST /api/checkins/<checkin_id>/reject/
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, checkin_id):
+        checkin = get_object_or_404(CheckIn, id=checkin_id)
+
+        if not can_verify_individual_checkin(request.user, checkin):
+            return Response(
+                {"detail": "You do not have permission to reject this check-in."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        if checkin.status != "PENDING":
+            return Response(
+                {"detail": "Only pending check-ins can be rejected."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        reason = (request.data.get("reason") or "").strip()
+        checkin.reject(request.user, reason)
+        return Response({"detail": "Rejected.", "reason": reason})
+
+class CheckInDetailView(APIView):
+    """
+    GET    /api/checkins/<checkin_id>/   -> retrieve one check-in
+    PATCH  /api/checkins/<checkin_id>/   -> update one check-in (creator only, pending only)
+    DELETE /api/checkins/<checkin_id>/   -> delete one check-in (creator only, pending only)
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, checkin_id):
+        checkin = get_object_or_404(CheckIn, id=checkin_id)
+
+        if not can_view_goal(request.user, checkin.goal):
+            return Response(
+                {"detail": "You do not have permission to view this check-in."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        return Response(CheckInSerializer(checkin).data)
+
+    def patch(self, request, checkin_id):
+        checkin = get_object_or_404(CheckIn, id=checkin_id)
+
+        if checkin.created_by_id != request.user.id:
+            return Response(
+                {"detail": "Only the creator can update this check-in."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        if checkin.status != "PENDING":
+            return Response(
+                {"detail": "Only pending check-ins can be updated."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        serializer = CheckInSerializer(checkin, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+
+        return Response(serializer.data)
+
+    def delete(self, request, checkin_id):
+        checkin = get_object_or_404(CheckIn, id=checkin_id)
+
+        if checkin.created_by_id != request.user.id:
+            return Response(
+                {"detail": "Only the creator can delete this check-in."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        if checkin.status != "PENDING":
+            return Response(
+                {"detail": "Only pending check-ins can be deleted."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        checkin.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+    
+
+# ------------------------------------------------------------
+# INDIVIDUAL COMMENTS
+# ------------------------------------------------------------
+
+class CommentListCreateView(APIView):
+    """
+    GET  /api/comments/?goal=<goal_id>
+    POST /api/comments/
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        goal_id = request.query_params.get("goal")
+        if not goal_id:
+            return Response(
+                {"detail": "Provide ?goal=<goal_id>"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        goal = get_object_or_404(Goal, id=goal_id)
+
+        if not can_view_goal(request.user, goal):
+            return Response(
+                {"detail": "You do not have permission to view comments for this goal."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        comments = Comment.objects.filter(goal=goal).order_by("-created_at")
+        return Response(CommentSerializer(comments, many=True).data)
+
+    def post(self, request):
+        serializer = CommentSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        goal = serializer.validated_data["goal"]
+        checkin = serializer.validated_data.get("checkin")
+
+        if not can_view_goal(request.user, goal):
+            return Response(
+                {"detail": "You do not have permission to comment on this goal."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        if checkin and checkin.goal_id != goal.id:
+            return Response(
+                {"detail": "That check-in does not belong to this goal."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        comment = serializer.save(author=request.user)
+        return Response(CommentSerializer(comment).data, status=status.HTTP_201_CREATED)
+
+
+class CommentDetailView(APIView):
+    """
+    DELETE /api/comments/<comment_id>/
+    """
+    permission_classes = [IsAuthenticated]
+
+    def delete(self, request, comment_id):
+        comment = get_object_or_404(Comment, id=comment_id)
+
+        if not can_view_goal(request.user, comment.goal):
+            return Response(
+                {"detail": "You do not have permission to access this comment."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        if comment.author_id != request.user.id and not is_goal_owner(request.user, comment.goal):
+            return Response(
+                {"detail": "You do not have permission to delete this comment."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        comment.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+# ------------------------------------------------------------
+# PODS
+# ------------------------------------------------------------
+
 class PodListCreateView(APIView):
     """
-    GET  /api/pods/        -> list pods where I am ACTIVE member
-    POST /api/pods/        -> create a pod and auto-create OWNER membership for me
+    GET  /api/pods/ -> list pods where I am ACTIVE member
+    POST /api/pods/ -> create a pod and auto-create OWNER membership for me
     """
     permission_classes = [IsAuthenticated]
 
@@ -206,7 +501,7 @@ class PodListCreateView(APIView):
 
 class PodDetailView(APIView):
     """
-    GET /api/pods/<pod_id>/ -> retrieve pod (must be ACTIVE member)
+    GET /api/pods/<pod_id>/ -> retrieve pod
     """
     permission_classes = [IsAuthenticated]
 
@@ -222,10 +517,14 @@ class PodDetailView(APIView):
         return Response(PodSerializer(pod).data)
 
 
+# ------------------------------------------------------------
+# POD MEMBERSHIPS
+# ------------------------------------------------------------
+
 class PodMembershipListCreateView(APIView):
     """
     GET  /api/pod-memberships/?pod=<pod_id>
-         -> list memberships for a pod (must be ACTIVE member)
+         -> list memberships for a pod
 
     GET  /api/pod-memberships/
          -> list my own pod memberships / invites
@@ -293,7 +592,6 @@ class PodMembershipListCreateView(APIView):
 class PodMembershipAcceptView(APIView):
     """
     POST /api/pod-memberships/<membership_id>/accept/
-    Only the invited user can accept their invite.
     """
     permission_classes = [IsAuthenticated]
 
@@ -319,7 +617,6 @@ class PodMembershipAcceptView(APIView):
 class PodMembershipDeclineView(APIView):
     """
     POST /api/pod-memberships/<membership_id>/decline/
-    Only the invited user can decline their invite.
     """
     permission_classes = [IsAuthenticated]
 
@@ -342,10 +639,14 @@ class PodMembershipDeclineView(APIView):
         return Response({"detail": "Membership declined."})
 
 
+# ------------------------------------------------------------
+# POD GOALS
+# ------------------------------------------------------------
+
 class PodGoalListCreateView(APIView):
     """
-    GET  /api/pod-goals/?pod=<pod_id> -> list goals in pod (must be ACTIVE member)
-    POST /api/pod-goals/              -> create pod goal (must be ACTIVE member)
+    GET  /api/pod-goals/?pod=<pod_id> -> list goals in pod
+    POST /api/pod-goals/              -> create pod goal
     """
     permission_classes = [IsAuthenticated]
 
@@ -384,10 +685,73 @@ class PodGoalListCreateView(APIView):
         return Response(PodGoalSerializer(goal).data, status=status.HTTP_201_CREATED)
 
 
+class PodGoalDetailView(APIView):
+    """
+    GET    /api/pod-goals/<pod_goal_id>/   -> retrieve one pod goal
+    PATCH  /api/pod-goals/<pod_goal_id>/   -> update one pod goal
+    DELETE /api/pod-goals/<pod_goal_id>/   -> delete one pod goal
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, pod_goal_id):
+        pod_goal = get_object_or_404(PodGoal, id=pod_goal_id)
+
+        if not is_active_member(request.user, pod_goal.pod):
+            return Response(
+                {"detail": "You are not an ACTIVE member of this pod."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        return Response(PodGoalSerializer(pod_goal).data)
+
+    def patch(self, request, pod_goal_id):
+        pod_goal = get_object_or_404(PodGoal, id=pod_goal_id)
+
+        if not is_active_member(request.user, pod_goal.pod):
+            return Response(
+                {"detail": "You are not an ACTIVE member of this pod."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        if pod_goal.created_by_id != request.user.id:
+            return Response(
+                {"detail": "Only the creator can update this pod goal."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        serializer = PodGoalSerializer(pod_goal, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+
+        return Response(serializer.data)
+
+    def delete(self, request, pod_goal_id):
+        pod_goal = get_object_or_404(PodGoal, id=pod_goal_id)
+
+        if not is_active_member(request.user, pod_goal.pod):
+            return Response(
+                {"detail": "You are not an ACTIVE member of this pod."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        if pod_goal.created_by_id != request.user.id:
+            return Response(
+                {"detail": "Only the creator can delete this pod goal."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        pod_goal.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+# ------------------------------------------------------------
+# POD CHECK-INS
+# ------------------------------------------------------------
+
 class PodCheckInListCreateView(APIView):
     """
-    GET  /api/pod-checkins/?pod_goal=<pod_goal_id> -> list check-ins for a goal (ACTIVE member only)
-    POST /api/pod-checkins/                        -> create check-in (ACTIVE member only)
+    GET  /api/pod-checkins/?pod_goal=<pod_goal_id> -> list check-ins for a goal
+    POST /api/pod-checkins/                        -> create check-in
     """
     permission_classes = [IsAuthenticated]
 
@@ -427,101 +791,11 @@ class PodCheckInListCreateView(APIView):
             PodCheckInSerializer(checkin).data,
             status=status.HTTP_201_CREATED,
         )
-    
-class CheckInListCreateView(APIView):
-    """
-    GET  /api/checkins/?goal=<goal_id>
-    POST /api/checkins/
-    """
-    permission_classes = [IsAuthenticated]
 
-    def get(self, request):
-        goal_id = request.query_params.get("goal")
-        if not goal_id:
-            return Response(
-                {"detail": "Provide ?goal=<goal_id>"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        goal = get_object_or_404(Goal, id=goal_id)
-
-        if not can_view_goal(request.user, goal):
-            return Response(
-                {"detail": "You do not have permission to view this goal's check-ins."},
-                status=status.HTTP_403_FORBIDDEN,
-            )
-
-        checkins = CheckIn.objects.filter(goal=goal).order_by("-created_at")
-        return Response(CheckInSerializer(checkins, many=True).data)
-
-    def post(self, request):
-        serializer = CheckInSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-
-        goal = serializer.validated_data["goal"]
-
-        if not is_goal_owner(request.user, goal):
-            return Response(
-                {"detail": "Only the goal owner can create check-ins."},
-                status=status.HTTP_403_FORBIDDEN,
-            )
-
-        checkin = serializer.save(created_by=request.user)
-        return Response(CheckInSerializer(checkin).data, status=status.HTTP_201_CREATED)
-
-
-class CheckInApproveView(APIView):
-    permission_classes = [IsAuthenticated]
-
-    def post(self, request, checkin_id):
-        checkin = get_object_or_404(CheckIn, id=checkin_id)
-
-        if not can_verify_individual_checkin(request.user, checkin):
-            return Response(
-                {"detail": "You do not have permission to approve this check-in."},
-                status=status.HTTP_403_FORBIDDEN,
-            )
-
-        if checkin.status != "PENDING":
-            return Response(
-                {"detail": "Only pending check-ins can be approved."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        checkin.approve(request.user)
-        return Response({"detail": "Approved."})
-
-
-class CheckInRejectView(APIView):
-    permission_classes = [IsAuthenticated]
-
-    def post(self, request, checkin_id):
-        checkin = get_object_or_404(CheckIn, id=checkin_id)
-
-        if not can_verify_individual_checkin(request.user, checkin):
-            return Response(
-                {"detail": "You do not have permission to reject this check-in."},
-                status=status.HTTP_403_FORBIDDEN,
-            )
-
-        if checkin.status != "PENDING":
-            return Response(
-                {"detail": "Only pending check-ins can be rejected."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        reason = (request.data.get("reason") or "").strip()
-        checkin.reject(request.user, reason)
-        return Response({"detail": "Rejected.", "reason": reason})
 
 class PodCheckInApproveView(APIView):
     """
     POST /api/pod-checkins/<checkin_id>/approve/
-
-    Rules:
-    - verifier must be ACTIVE member
-    - verifier cannot approve their own check-in
-    - only PENDING check-ins can be approved
     """
     permission_classes = [IsAuthenticated]
 
@@ -554,12 +828,6 @@ class PodCheckInApproveView(APIView):
 class PodCheckInRejectView(APIView):
     """
     POST /api/pod-checkins/<checkin_id>/reject/
-    Body: {"reason": "short reason"}
-
-    Rules:
-    - verifier must be ACTIVE member
-    - verifier cannot reject their own check-in
-    - only PENDING check-ins can be rejected
     """
     permission_classes = [IsAuthenticated]
 
@@ -588,176 +856,86 @@ class PodCheckInRejectView(APIView):
         reason = (request.data.get("reason") or "").strip()
         checkin.reject(request.user, reason)
         return Response({"detail": "Rejected.", "reason": reason})
-    
-class ConnectionListCreateView(APIView):
-    """
-    GET  /api/connections/ -> list my connection records
-    POST /api/connections/ -> create a connection invite
 
-    POST body:
-    {
-      "invitee": <user_id>
-    }
+
+class PodCheckInDetailView(APIView):
+    """
+    GET    /api/pod-checkins/<checkin_id>/   -> retrieve one pod check-in
+    PATCH  /api/pod-checkins/<checkin_id>/   -> update one pod check-in (creator only, pending only)
+    DELETE /api/pod-checkins/<checkin_id>/   -> delete one pod check-in (creator only, pending only)
     """
     permission_classes = [IsAuthenticated]
 
-    def get(self, request):
-        connections = Connection.objects.filter(
-            Q(inviter=request.user) | Q(invitee=request.user)
-        ).order_by("-created_at")
+    def get(self, request, checkin_id):
+        checkin = get_object_or_404(PodCheckIn, id=checkin_id)
 
-        return Response(ConnectionSerializer(connections, many=True).data)
+        if not is_active_member(request.user, checkin.pod_goal.pod):
+            return Response(
+                {"detail": "You are not an ACTIVE member of this pod."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
 
-    def post(self, request):
-        serializer = ConnectionSerializer(data=request.data)
+        return Response(PodCheckInSerializer(checkin).data)
+
+    def patch(self, request, checkin_id):
+        checkin = get_object_or_404(PodCheckIn, id=checkin_id)
+
+        if not is_active_member(request.user, checkin.pod_goal.pod):
+            return Response(
+                {"detail": "You are not an ACTIVE member of this pod."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        if checkin.created_by_id != request.user.id:
+            return Response(
+                {"detail": "Only the creator can update this pod check-in."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        if checkin.status != "PENDING":
+            return Response(
+                {"detail": "Only pending pod check-ins can be updated."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        serializer = PodCheckInSerializer(checkin, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
+        serializer.save()
 
-        invitee = serializer.validated_data["invitee"]
+        return Response(serializer.data)
 
-        if invitee == request.user:
+    def delete(self, request, checkin_id):
+        checkin = get_object_or_404(PodCheckIn, id=checkin_id)
+
+        if not is_active_member(request.user, checkin.pod_goal.pod):
             return Response(
-                {"detail": "You cannot connect with yourself."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        try:
-            connection = Connection.objects.create(
-                inviter=request.user,
-                invitee=invitee,
-                status="PENDING",
-            )
-        except IntegrityError:
-            return Response(
-                {"detail": "A connection between these users already exists."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        return Response(
-            ConnectionSerializer(connection).data,
-            status=status.HTTP_201_CREATED,
-        )
-
-
-class ConnectionAcceptView(APIView):
-    """
-    POST /api/connections/<connection_id>/accept/
-    Only the invitee can accept.
-    """
-    permission_classes = [IsAuthenticated]
-
-    def post(self, request, connection_id):
-        connection = get_object_or_404(Connection, id=connection_id)
-
-        if connection.invitee_id != request.user.id:
-            return Response(
-                {"detail": "You can only accept your own connection invite."},
+                {"detail": "You are not an ACTIVE member of this pod."},
                 status=status.HTTP_403_FORBIDDEN,
             )
 
-        if connection.status != "PENDING":
+        if checkin.created_by_id != request.user.id:
             return Response(
-                {"detail": "Only pending connections can be accepted."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        connection.accept()
-        return Response({"detail": "Connection accepted."})
-
-
-class ConnectionDeclineView(APIView):
-    """
-    POST /api/connections/<connection_id>/decline/
-    Only the invitee can decline.
-    """
-    permission_classes = [IsAuthenticated]
-
-    def post(self, request, connection_id):
-        connection = get_object_or_404(Connection, id=connection_id)
-
-        if connection.invitee_id != request.user.id:
-            return Response(
-                {"detail": "You can only decline your own connection invite."},
+                {"detail": "Only the creator can delete this pod check-in."},
                 status=status.HTTP_403_FORBIDDEN,
             )
 
-        if connection.status != "PENDING":
+        if checkin.status != "PENDING":
             return Response(
-                {"detail": "Only pending connections can be declined."},
+                {"detail": "Only pending pod check-ins can be deleted."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        connection.decline()
-        return Response({"detail": "Connection declined."})
-    
+        checkin.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
-class CommentListCreateView(APIView):
-    """
-    GET  /api/comments/?goal=<goal_id>
-    POST /api/comments/
+# ------------------------------------------------------------
+# POD COMMENTS
+# ------------------------------------------------------------
 
-    POST body:
-    {
-      "goal": <goal_id>,
-      "checkin": <optional_checkin_id>,
-      "kind": "COMMENT",
-      "body": "Nice work"
-    }
-    """
-    permission_classes = [IsAuthenticated]
-
-    def get(self, request):
-        goal_id = request.query_params.get("goal")
-        if not goal_id:
-            return Response(
-                {"detail": "Provide ?goal=<goal_id>"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        goal = get_object_or_404(Goal, id=goal_id)
-
-        if not can_view_goal(request.user, goal):
-            return Response(
-                {"detail": "You do not have permission to view comments for this goal."},
-                status=status.HTTP_403_FORBIDDEN,
-            )
-
-        comments = Comment.objects.filter(goal=goal).order_by("-created_at")
-        return Response(CommentSerializer(comments, many=True).data)
-
-    def post(self, request):
-        serializer = CommentSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-
-        goal = serializer.validated_data["goal"]
-        checkin = serializer.validated_data.get("checkin")
-
-        if not can_view_goal(request.user, goal):
-            return Response(
-                {"detail": "You do not have permission to comment on this goal."},
-                status=status.HTTP_403_FORBIDDEN,
-            )
-
-        if checkin and checkin.goal_id != goal.id:
-            return Response(
-                {"detail": "That check-in does not belong to this goal."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        comment = serializer.save(author=request.user)
-        return Response(CommentSerializer(comment).data, status=status.HTTP_201_CREATED)
-    
 class PodCommentListCreateView(APIView):
     """
     GET  /api/pod-comments/?pod_goal=<pod_goal_id>
     POST /api/pod-comments/
-
-    POST body:
-    {
-      "pod_goal": <pod_goal_id>,
-      "checkin": <optional_pod_checkin_id>,
-      "kind": "COMMENT",
-      "body": "Great progress"
-    }
     """
     permission_classes = [IsAuthenticated]
 
@@ -801,3 +979,126 @@ class PodCommentListCreateView(APIView):
 
         comment = serializer.save(author=request.user)
         return Response(PodCommentSerializer(comment).data, status=status.HTTP_201_CREATED)
+
+
+class PodCommentDetailView(APIView):
+    """
+    DELETE /api/pod-comments/<comment_id>/
+    """
+    permission_classes = [IsAuthenticated]
+
+    def delete(self, request, comment_id):
+        comment = get_object_or_404(PodComment, id=comment_id)
+
+        if not is_active_member(request.user, comment.pod_goal.pod):
+            return Response(
+                {"detail": "You are not an ACTIVE member of this pod."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        if comment.author_id != request.user.id and comment.pod_goal.created_by_id != request.user.id:
+            return Response(
+                {"detail": "You do not have permission to delete this pod comment."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        comment.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+# ------------------------------------------------------------
+# CONNECTIONS
+# ------------------------------------------------------------
+
+class ConnectionListCreateView(APIView):
+    """
+    GET  /api/connections/ -> list my connection records
+    POST /api/connections/ -> create a connection invite
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        connections = Connection.objects.filter(
+            Q(inviter=request.user) | Q(invitee=request.user)
+        ).order_by("-created_at")
+
+        return Response(ConnectionSerializer(connections, many=True).data)
+
+    def post(self, request):
+        serializer = ConnectionSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        invitee = serializer.validated_data["invitee"]
+
+        if invitee == request.user:
+            return Response(
+                {"detail": "You cannot connect with yourself."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            connection = Connection.objects.create(
+                inviter=request.user,
+                invitee=invitee,
+                status="PENDING",
+            )
+        except IntegrityError:
+            return Response(
+                {"detail": "A connection between these users already exists."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        return Response(
+            ConnectionSerializer(connection).data,
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class ConnectionAcceptView(APIView):
+    """
+    POST /api/connections/<connection_id>/accept/
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, connection_id):
+        connection = get_object_or_404(Connection, id=connection_id)
+
+        if connection.invitee_id != request.user.id:
+            return Response(
+                {"detail": "You can only accept your own connection invite."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        if connection.status != "PENDING":
+            return Response(
+                {"detail": "Only pending connections can be accepted."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        connection.accept()
+        return Response({"detail": "Connection accepted."})
+
+
+class ConnectionDeclineView(APIView):
+    """
+    POST /api/connections/<connection_id>/decline/
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, connection_id):
+        connection = get_object_or_404(Connection, id=connection_id)
+
+        if connection.invitee_id != request.user.id:
+            return Response(
+                {"detail": "You can only decline your own connection invite."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        if connection.status != "PENDING":
+            return Response(
+                {"detail": "Only pending connections can be declined."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        connection.decline()
+        return Response({"detail": "Connection declined."})

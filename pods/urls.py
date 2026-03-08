@@ -1,19 +1,37 @@
 from django.urls import path
 
 from .views import (
-    PodListCreateView, PodDetailView,
-    PodMembershipListCreateView, PodMembershipAcceptView,
+    GoalListCreateView,
+    GoalDetailView,
+    GoalAssignmentListCreateView,
+    GoalAssignmentAcceptView,
+    GoalAssignmentDeclineView,
+    CheckInListCreateView,
+    CheckInDetailView,
+    CheckInApproveView,
+    CheckInRejectView,
+    CommentListCreateView,
+    CommentDetailView,
+    PodListCreateView,
+    PodDetailView,
+    PodMembershipListCreateView,
+    PodMembershipAcceptView,
+    PodMembershipDeclineView,
     PodGoalListCreateView,
-    PodCheckInListCreateView, PodCheckInApproveView, PodCheckInRejectView, PodMembershipDeclineView,
-    ConnectionListCreateView, ConnectionAcceptView, ConnectionDeclineView,
-    GoalListCreateView, GoalDetailView,
-    GoalAssignmentListCreateView, GoalAssignmentAcceptView, GoalAssignmentDeclineView,
-    CheckInListCreateView, CheckInApproveView, CheckInRejectView, CommentListCreateView, PodCommentListCreateView,
+    PodGoalDetailView,
+    PodCheckInListCreateView,
+    PodCheckInDetailView,
+    PodCheckInApproveView,
+    PodCheckInRejectView,
+    PodCommentListCreateView,
+    PodCommentDetailView,
+    ConnectionListCreateView,
+    ConnectionAcceptView,
+    ConnectionDeclineView,
 )
 
 urlpatterns = [
-
-     # Individual goals
+    # Individual goals
     path("goals/", GoalListCreateView.as_view(), name="goal-list-create"),
     path("goals/<int:goal_id>/", GoalDetailView.as_view(), name="goal-detail"),
 
@@ -24,34 +42,39 @@ urlpatterns = [
 
     # Individual check-ins
     path("checkins/", CheckInListCreateView.as_view(), name="checkin-list-create"),
+    path("checkins/<int:checkin_id>/", CheckInDetailView.as_view(), name="checkin-detail"),
     path("checkins/<int:checkin_id>/approve/", CheckInApproveView.as_view(), name="checkin-approve"),
     path("checkins/<int:checkin_id>/reject/", CheckInRejectView.as_view(), name="checkin-reject"),
 
+    # Individual comments
+    path("comments/", CommentListCreateView.as_view(), name="comment-list-create"),
+    path("comments/<int:comment_id>/", CommentDetailView.as_view(), name="comment-detail"),
+
     # Pods
-    path("pods/", PodListCreateView.as_view()),
-    path("pods/<int:pod_id>/", PodDetailView.as_view()),
+    path("pods/", PodListCreateView.as_view(), name="pod-list-create"),
+    path("pods/<int:pod_id>/", PodDetailView.as_view(), name="pod-detail"),
+
+    # Pod memberships
+    path("pod-memberships/", PodMembershipListCreateView.as_view(), name="pod-membership-list-create"),
+    path("pod-memberships/<int:membership_id>/accept/", PodMembershipAcceptView.as_view(), name="pod-membership-accept"),
     path("pod-memberships/<int:membership_id>/decline/", PodMembershipDeclineView.as_view(), name="pod-membership-decline"),
 
-    # Memberships
-    path("pod-memberships/", PodMembershipListCreateView.as_view()),
-    path("pod-memberships/<int:membership_id>/accept/", PodMembershipAcceptView.as_view()),
+    # Pod goals
+    path("pod-goals/", PodGoalListCreateView.as_view(), name="pod-goal-list-create"),
+    path("pod-goals/<int:pod_goal_id>/", PodGoalDetailView.as_view(), name="pod-goal-detail"),
 
-    # Pod Goals
-    path("pod-goals/", PodGoalListCreateView.as_view()),
+    # Pod check-ins
+    path("pod-checkins/", PodCheckInListCreateView.as_view(), name="pod-checkin-list-create"),
+    path("pod-checkins/<int:checkin_id>/", PodCheckInDetailView.as_view(), name="pod-checkin-detail"),
+    path("pod-checkins/<int:checkin_id>/approve/", PodCheckInApproveView.as_view(), name="pod-checkin-approve"),
+    path("pod-checkins/<int:checkin_id>/reject/", PodCheckInRejectView.as_view(), name="pod-checkin-reject"),
 
-    # Checkins
-    path("pod-checkins/", PodCheckInListCreateView.as_view()),
-    path("pod-checkins/<int:checkin_id>/approve/", PodCheckInApproveView.as_view()),
-    path("pod-checkins/<int:checkin_id>/reject/", PodCheckInRejectView.as_view()),
+    # Pod comments
+    path("pod-comments/", PodCommentListCreateView.as_view(), name="pod-comment-list-create"),
+    path("pod-comments/<int:comment_id>/", PodCommentDetailView.as_view(), name="pod-comment-detail"),
 
     # Connections
     path("connections/", ConnectionListCreateView.as_view(), name="connection-list-create"),
     path("connections/<int:connection_id>/accept/", ConnectionAcceptView.as_view(), name="connection-accept"),
     path("connections/<int:connection_id>/decline/", ConnectionDeclineView.as_view(), name="connection-decline"),
-
-    # Individual comments
-    path("comments/", CommentListCreateView.as_view(), name="comment-list-create"),
-
-    # Pod comments
-    path("pod-comments/", PodCommentListCreateView.as_view(), name="pod-comment-list-create"),
 ]
