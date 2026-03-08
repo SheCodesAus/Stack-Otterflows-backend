@@ -5,6 +5,7 @@ from rest_framework import status
 from django.db import IntegrityError
 from django.shortcuts import get_object_or_404
 from django.db.models import Q
+from rest_framework.authentication import TokenAuthentication
 
 from .models import (
     Pod,
@@ -1016,6 +1017,8 @@ class ConnectionListCreateView(APIView):
     POST /api/connections/ -> create a connection invite
     """
     permission_classes = [IsAuthenticated]
+    authentication_classes = [TokenAuthentication]
+    
 
     def get(self, request):
         connections = Connection.objects.filter(
