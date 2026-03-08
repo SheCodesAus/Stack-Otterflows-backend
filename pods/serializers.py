@@ -1,5 +1,108 @@
 from rest_framework import serializers
-from .models import Pod, PodMembership, PodGoal, PodCheckIn, Connection
+from .models import ( 
+Pod, PodMembership, PodGoal, PodCheckIn, Connection,
+Goal, GoalAssignment, CheckIn, Comment, PodComment )
+
+class GoalSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Goal
+        fields = [
+            "id",
+            "owner",
+            "title",
+            "motivation",
+            "category",
+            "metric_type",
+            "period",
+            "target_value",
+            "unit_label",
+            "start_date",
+            "end_date",
+            "is_active",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = ["id", "owner", "created_at", "updated_at"]
+
+    def validate(self, attrs):
+        start_date = attrs.get("start_date")
+        end_date = attrs.get("end_date")
+
+        if start_date and end_date and end_date < start_date:
+            raise serializers.ValidationError("end_date cannot be before start_date.")
+
+        return attrs
+
+
+class GoalAssignmentSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = GoalAssignment
+        fields = [
+            "id",
+            "goal",
+            "buddy",
+            "consent_status",
+            "created_at",
+            "responded_at",
+        ]
+        read_only_fields = ["id", "consent_status", "created_at", "responded_at"]
+
+
+class CheckInSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = CheckIn
+        fields = [
+            "id",
+            "goal",
+            "created_by",
+            "period_start",
+            "value",
+            "note",
+            "proof",
+            "status",
+            "verified_by",
+            "verified_at",
+            "rejection_reason",
+            "created_at",
+        ]
+        read_only_fields = [
+            "id",
+            "created_by",
+            "status",
+            "verified_by",
+            "verified_at",
+            "rejection_reason",
+            "created_at",
+        ]
+
+
+class CommentSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Comment
+        fields = [
+            "id",
+            "goal",
+            "checkin",
+            "author",
+            "kind",
+            "body",
+            "created_at",
+        ]
+        read_only_fields = ["id", "author", "created_at"]
+
+class PodCommentSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PodComment
+        fields = [
+            "id",
+            "pod_goal",
+            "checkin",
+            "author",
+            "kind",
+            "body",
+            "created_at",
+        ]
+        read_only_fields = ["id", "author", "created_at"]
 
 class PodSerializer(serializers.ModelSerializer):
     class Meta:

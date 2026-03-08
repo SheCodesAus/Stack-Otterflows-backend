@@ -1,5 +1,5 @@
 from rest_framework.permissions import BasePermission
-from .models import PodMembership, PodCheckIn, PodGoal, Pod
+from .models import PodMembership, PodCheckIn, PodGoal, Pod, GoalAssignment, Goal, CheckIn
 
 def is_active_member(user, pod: Pod) -> bool:
     """
@@ -15,6 +15,24 @@ def can_verify_checkin(user, checkin: PodCheckIn) -> bool:
     """
     return is_active_member(user, checkin.pod_goal.pod) and checkin.created_by_id != user.id
 
+def is_goal_owner(user, goal: Goal) -> bool:
+    return goal.owner_id == user.id
+
+def is_accepted_goal_buddy(user, goal: Goal) -> bool:
+    return GoalAssignment.objects.filter(
+        goal=goal,
+        buddy=user,
+        consent_status="ACCEPTED",
+    ).exists()
+
+def can_view_goal(user, goal: Goal) -> bool:
+    return is_goal_owner(user, goal) or is_accepted_goal_buddy(user, goal)
+
+def can_verify_individual_checkin(user, checkin: CheckIn) -> bool:
+    return (
+        checkin.created_by_id != user.id
+        and is_accepted_goal_buddy(user, checkin.goal)
+    )
 
 class IsActivePodMember(BasePermission):
     """
