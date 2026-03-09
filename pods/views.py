@@ -31,6 +31,7 @@ from .serializers import (
     CheckInSerializer,
     CommentSerializer,
     PodCommentSerializer,
+    GoalDetailSerializer,
 )
 
 from .permissions import (
@@ -73,7 +74,15 @@ class GoalDetailView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, goal_id):
-        goal = get_object_or_404(Goal, id=goal_id)
+        goal = get_object_or_404(
+            Goal.objects.prefetch_related(
+                "assignments__buddy",
+                "checkins__created_by",
+                "checkins__verified_by",
+                "comments__author",
+            ),
+            id=goal_id,
+        )
 
         if not can_view_goal(request.user, goal):
             return Response(
@@ -81,7 +90,7 @@ class GoalDetailView(APIView):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
-        return Response(GoalSerializer(goal).data)
+        return Response(GoalDetailSerializer(goal).data)
 
     def patch(self, request, goal_id):
         goal = get_object_or_404(Goal, id=goal_id)
@@ -109,7 +118,6 @@ class GoalDetailView(APIView):
 
         goal.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
-
 
 # ------------------------------------------------------------
 # GOAL ASSIGNMENTS
