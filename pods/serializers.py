@@ -249,6 +249,8 @@ class GoalDetailSerializer(serializers.ModelSerializer):
         fields = [
             "id",
             "owner",
+            "owner_username",
+            "owner_display_name",
             "title",
             "motivation",
             "category",
