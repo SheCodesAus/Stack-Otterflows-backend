@@ -5,7 +5,7 @@ from rest_framework import status
 from django.db import IntegrityError
 from django.shortcuts import get_object_or_404
 from django.db.models import Q
-from rest_framework.authentication import TokenAuthentication
+
 
 from .models import (
     Pod,
@@ -21,7 +21,7 @@ from .models import (
 )
 
 from .serializers import (
-    PodSerializer,
+   PodSerializer,
     PodMembershipSerializer,
     PodGoalSerializer,
     PodCheckInSerializer,
@@ -32,6 +32,9 @@ from .serializers import (
     CommentSerializer,
     PodCommentSerializer,
     GoalDetailSerializer,
+    PodDetailSerializer,
+    CheckInDetailSerializer,
+    PodCheckInDetailSerializer,
 )
 
 from .permissions import (
@@ -354,7 +357,7 @@ class CheckInDetailView(APIView):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
-        return Response(CheckInSerializer(checkin).data)
+        return Response(CheckInDetailSerializer(checkin).data)
 
     def patch(self, request, checkin_id):
         checkin = get_object_or_404(CheckIn, id=checkin_id)
@@ -515,7 +518,16 @@ class PodDetailView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, pod_id):
-        pod = get_object_or_404(Pod, id=pod_id)
+        pod = get_object_or_404(
+            Pod.objects.prefetch_related(
+                "memberships__user",
+                "goals__created_by",
+                "goals__checkins__created_by",
+                "goals__checkins__verified_by",
+                "goals__comments__author",
+            ),
+            id=pod_id,
+        )
 
         if not is_active_member(request.user, pod):
             return Response(
@@ -523,8 +535,7 @@ class PodDetailView(APIView):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
-        return Response(PodSerializer(pod).data)
-
+        return Response(PodDetailSerializer(pod).data)
 
 # ------------------------------------------------------------
 # POD MEMBERSHIPS
@@ -884,7 +895,7 @@ class PodCheckInDetailView(APIView):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
-        return Response(PodCheckInSerializer(checkin).data)
+        return Response(PodCheckInDetailSerializer(checkin).data)
 
     def patch(self, request, checkin_id):
         checkin = get_object_or_404(PodCheckIn, id=checkin_id)
@@ -1025,7 +1036,6 @@ class ConnectionListCreateView(APIView):
     POST /api/connections/ -> create a connection invite
     """
     permission_classes = [IsAuthenticated]
-    authentication_classes = [TokenAuthentication]
     
 
     def get(self, request):
