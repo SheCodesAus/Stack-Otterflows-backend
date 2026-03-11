@@ -8,6 +8,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from django.core.exceptions import ValidationError as DjangoValidationError
+from django.contrib.auth import get_user_model
 from .services import create_notification, create_bulk_notifications, resolve_notifications
 
 from .models import (
@@ -40,6 +41,7 @@ from .serializers import (
     CheckInDetailSerializer,
     PodCheckInDetailSerializer,
     NotificationSerializer,
+    UserSearchSerializer,
 )
 
 from .permissions import (
@@ -1698,3 +1700,52 @@ class NotificationMarkAllReadView(APIView):
                 "updated_count": updated,
             }
         )
+    
+User = get_user_model()
+
+
+class UserSearchView(APIView):
+    """
+    GET /api/users/search/?q=beck
+    Returns users matching the search term, excluding:
+    - the current user
+    - users who already have any connection record with the current user
+      (pending / accepted / declined / blocked)
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        query = (request.query_params.get("q") or "").strip()
+
+        if len(query) < 2:
+            return Response([])
+
+        existing_connections = Connection.objects.filter(
+            Q(inviter=request.user) | Q(invitee=request.user)
+        )
+
+        excluded_user_ids = set()
+
+        for connection in existing_connections:
+            if connection.inviter_id == request.user.id:
+                excluded_user_ids.add(connection.invitee_id)
+            else:
+                excluded_user_ids.add(connection.inviter_id)
+
+        searchable_fields = ["username", "first_name", "last_name", "email"]
+
+        if any(field.name == "display_name" for field in User._meta.get_fields()):
+            searchable_fields.append("display_name")
+
+        filters = Q()
+        for field in searchable_fields:
+            filters |= Q(**{f"{field}__icontains": query})
+
+        users = (
+            User.objects.filter(filters)
+            .exclude(id=request.user.id)
+            .exclude(id__in=excluded_user_ids)
+            .order_by("username")[:10]
+        )
+
+        return Response(UserSearchSerializer(users, many=True).data)

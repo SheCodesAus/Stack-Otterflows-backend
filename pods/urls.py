@@ -34,6 +34,7 @@ from .views import (
     NotificationMarkUnreadView,
     NotificationResolveView,
     NotificationMarkAllReadView,
+    UserSearchView,
 )
 
 urlpatterns = [
@@ -79,6 +80,9 @@ urlpatterns = [
     path("pod-comments/", PodCommentListCreateView.as_view(), name="pod-comment-list-create"),
     path("pod-comments/<int:comment_id>/", PodCommentDetailView.as_view(), name="pod-comment-detail"),
 
+    # User Search
+    path("users/search/", UserSearchView.as_view(), name="user-search"),
+    
     # Connections
     path("connections/", ConnectionListCreateView.as_view(), name="connection-list-create"),
     path("connections/<int:connection_id>/accept/", ConnectionAcceptView.as_view(), name="connection-accept"),

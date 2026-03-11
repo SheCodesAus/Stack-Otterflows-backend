@@ -1,3 +1,7 @@
+from django.contrib.auth import get_user_model
+
+User = get_user_model()
+
 from rest_framework import serializers
 from .models import (
     Pod,
@@ -549,3 +553,18 @@ class NotificationSerializer(serializers.ModelSerializer):
 
     def get_is_action_required(self, obj):
         return obj.is_action_required
+
+class UserSearchSerializer(serializers.ModelSerializer):
+    display_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = User
+        fields = ["id", "username", "display_name"]
+        read_only_fields = fields
+
+    def get_display_name(self, obj):
+        return (
+            getattr(obj, "display_name", None)
+            or obj.get_full_name().strip()
+            or obj.username
+        )
