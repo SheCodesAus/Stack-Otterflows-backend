@@ -41,7 +41,7 @@ class Connection(models.Model):
                 condition=~Q(inviter=F("invitee")),
                 name="connection_no_self_invite",
         ),
-]
+    ]
 
     def clean(self):
         if self.inviter_id and self.invitee_id:

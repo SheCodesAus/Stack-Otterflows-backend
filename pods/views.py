@@ -275,6 +275,17 @@ class GoalAssignmentDeclineView(APIView):
 
         assignment.decline()
 
+        create_notification(
+            recipient=assignment.goal.owner,
+            notif_type="GOAL_ASSIGNMENT_DECLINED",
+            actor=request.user,
+            payload={
+                "goal_id": assignment.goal.id,
+                "goal_title": assignment.goal.title,
+                "assignment_id": assignment.id,
+            },
+        )
+        
         resolve_notifications(
             recipient=request.user,
             notif_types=["GOAL_ASSIGNMENT_REQUEST"],
@@ -1281,7 +1292,26 @@ class PodCheckInDetailView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        pod = checkin.pod_goal.pod
+
+        active_reviewers = [
+            membership.user
+            for membership in PodMembership.objects.filter(
+                pod=pod,
+                status="ACTIVE",
+            ).select_related("user")
+            if membership.user_id != checkin.created_by_id
+        ]
+
+        checkin_id_value = checkin.id
         checkin.delete()
+
+        resolve_notifications(
+            recipients=active_reviewers,
+            notif_types=["POD_CHECKIN_SUBMITTED"],
+            payload_filters={"pod_checkin_id": checkin_id_value},
+        )
+
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 # ------------------------------------------------------------

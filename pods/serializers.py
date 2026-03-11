@@ -109,6 +109,11 @@ class CheckInSerializer(serializers.ModelSerializer):
             "created_at",
         ]
 
+    def validate(self, attrs):
+        if self.instance and "goal" in attrs and attrs["goal"].id != self.instance.goal_id:
+            raise serializers.ValidationError("You cannot change the goal of an existing check-in.")
+        return attrs
+
 
 class CheckInDetailSerializer(serializers.ModelSerializer):
     created_by_username = serializers.CharField(source="created_by.username", read_only=True)
@@ -331,7 +336,20 @@ class PodCheckInSerializer(serializers.ModelSerializer):
             "rejection_reason",
             "created_at",
         ]
-        read_only_fields = ["id", "created_by", "status", "verified_by", "verified_at", "created_at"]
+        read_only_fields = [
+            "id",
+            "created_by",
+            "status",
+            "verified_by",
+            "verified_at",
+            "rejection_reason",
+            "created_at",
+        ]
+
+    def validate(self, attrs):
+        if self.instance and "pod_goal" in attrs and attrs["pod_goal"].id != self.instance.pod_goal_id:
+            raise serializers.ValidationError("You cannot change the pod goal of an existing check-in.")
+        return attrs
 
 
 class PodCheckInDetailSerializer(serializers.ModelSerializer):
