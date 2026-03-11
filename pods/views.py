@@ -1,11 +1,14 @@
-from rest_framework.views import APIView
-from rest_framework.response import Response
-from rest_framework.permissions import IsAuthenticated
-from rest_framework import status
 from django.db import IntegrityError
-from django.shortcuts import get_object_or_404
 from django.db.models import Q
-
+from django.shortcuts import get_object_or_404
+from django.utils import timezone
+from rest_framework.exceptions import ValidationError
+from rest_framework import generics, status
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+from rest_framework.views import APIView
+from django.core.exceptions import ValidationError as DjangoValidationError
+from .services import create_notification, create_bulk_notifications, resolve_notifications
 
 from .models import (
     Pod,
@@ -18,10 +21,11 @@ from .models import (
     CheckIn,
     Comment,
     PodComment,
+    Notification,
 )
 
 from .serializers import (
-   PodSerializer,
+    PodSerializer,
     PodMembershipSerializer,
     PodGoalSerializer,
     PodCheckInSerializer,
@@ -35,6 +39,7 @@ from .serializers import (
     PodDetailSerializer,
     CheckInDetailSerializer,
     PodCheckInDetailSerializer,
+    NotificationSerializer,
 )
 
 from .permissions import (
@@ -43,7 +48,6 @@ from .permissions import (
     can_view_goal,
     can_verify_individual_checkin,
 )
-
 
 # ------------------------------------------------------------
 # INDIVIDUAL GOALS
@@ -188,6 +192,17 @@ class GoalAssignmentListCreateView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        create_notification(
+            recipient=buddy,
+            notif_type="GOAL_ASSIGNMENT_REQUEST",
+            actor=request.user,
+            payload={
+                "goal_id": goal.id,
+                "goal_title": goal.title,
+                "assignment_id": assignment.id,
+            },
+        )
+
         return Response(
             GoalAssignmentSerializer(assignment).data,
             status=status.HTTP_201_CREATED,
@@ -216,6 +231,24 @@ class GoalAssignmentAcceptView(APIView):
             )
 
         assignment.accept()
+
+        create_notification(
+            recipient=assignment.goal.owner,
+            notif_type="GOAL_ASSIGNMENT_ACCEPTED",
+            actor=request.user,
+            payload={
+                "goal_id": assignment.goal.id,
+                "goal_title": assignment.goal.title,
+                "assignment_id": assignment.id,
+            },
+        )
+
+        resolve_notifications(
+            recipient=request.user,
+            notif_types=["GOAL_ASSIGNMENT_REQUEST"],
+            payload_filters={"assignment_id": assignment.id},
+        )
+
         return Response({"detail": "Assignment accepted."})
 
 
@@ -241,6 +274,13 @@ class GoalAssignmentDeclineView(APIView):
             )
 
         assignment.decline()
+
+        resolve_notifications(
+            recipient=request.user,
+            notif_types=["GOAL_ASSIGNMENT_REQUEST"],
+            payload_filters={"assignment_id": assignment.id},
+        )
+
         return Response({"detail": "Assignment declined."})
 
 
@@ -287,6 +327,26 @@ class CheckInListCreateView(APIView):
             )
 
         checkin = serializer.save(created_by=request.user)
+
+        accepted_buddies = [
+            assignment.buddy
+            for assignment in GoalAssignment.objects.filter(
+                goal=goal,
+                consent_status="ACCEPTED",
+            ).select_related("buddy")
+        ]
+
+        create_bulk_notifications(
+            recipients=accepted_buddies,
+            notif_type="CHECKIN_SUBMITTED",
+            actor=request.user,
+            payload={
+                "goal_id": goal.id,
+                "goal_title": goal.title,
+                "checkin_id": checkin.id,
+            },
+        )
+
         return Response(CheckInSerializer(checkin).data, status=status.HTTP_201_CREATED)
 
 
@@ -312,6 +372,32 @@ class CheckInApproveView(APIView):
             )
 
         checkin.approve(request.user)
+
+        create_notification(
+            recipient=checkin.created_by,
+            notif_type="CHECKIN_APPROVED",
+            actor=request.user,
+            payload={
+                "goal_id": checkin.goal.id,
+                "goal_title": checkin.goal.title,
+                "checkin_id": checkin.id,
+            },
+        )
+
+        accepted_buddies = [
+            assignment.buddy
+            for assignment in GoalAssignment.objects.filter(
+                goal=checkin.goal,
+                consent_status="ACCEPTED",
+            ).select_related("buddy")
+        ]
+
+        resolve_notifications(
+            recipients=accepted_buddies,
+            notif_types=["CHECKIN_SUBMITTED"],
+            payload_filters={"checkin_id": checkin.id},
+        )
+
         return Response({"detail": "Approved."})
 
 
@@ -338,6 +424,33 @@ class CheckInRejectView(APIView):
 
         reason = (request.data.get("reason") or "").strip()
         checkin.reject(request.user, reason)
+
+        create_notification(
+            recipient=checkin.created_by,
+            notif_type="CHECKIN_REJECTED",
+            actor=request.user,
+            payload={
+                "goal_id": checkin.goal.id,
+                "goal_title": checkin.goal.title,
+                "checkin_id": checkin.id,
+                "reason": reason,
+            },
+        )
+
+        accepted_buddies = [
+            assignment.buddy
+            for assignment in GoalAssignment.objects.filter(
+                goal=checkin.goal,
+                consent_status="ACCEPTED",
+            ).select_related("buddy")
+        ]
+
+        resolve_notifications(
+            recipients=accepted_buddies,
+            notif_types=["CHECKIN_SUBMITTED"],
+            payload_filters={"checkin_id": checkin.id},
+        )
+
         return Response({"detail": "Rejected.", "reason": reason})
 
 class CheckInDetailView(APIView):
@@ -395,9 +508,24 @@ class CheckInDetailView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        accepted_buddies = [
+            assignment.buddy
+            for assignment in GoalAssignment.objects.filter(
+                goal=checkin.goal,
+                consent_status="ACCEPTED",
+            ).select_related("buddy")
+        ]
+
+        checkin_id_value = checkin.id
         checkin.delete()
+
+        resolve_notifications(
+            recipients=accepted_buddies,
+            notif_types=["CHECKIN_SUBMITTED"],
+            payload_filters={"checkin_id": checkin_id_value},
+        )
+
         return Response(status=status.HTTP_204_NO_CONTENT)
-    
 
 # ------------------------------------------------------------
 # INDIVIDUAL COMMENTS
@@ -454,9 +582,44 @@ class CommentListCreateView(APIView):
 
 class CommentDetailView(APIView):
     """
-    DELETE /api/comments/<comment_id>/
+    PATCH  /api/comments/<comment_id>/   -> update one comment (author only)
+    DELETE /api/comments/<comment_id>/   -> delete one comment
     """
     permission_classes = [IsAuthenticated]
+
+    def patch(self, request, comment_id):
+        comment = get_object_or_404(Comment, id=comment_id)
+
+        if not can_view_goal(request.user, comment.goal):
+            return Response(
+                {"detail": "You do not have permission to access this comment."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        if comment.author_id != request.user.id:
+            return Response(
+                {"detail": "Only the comment author can edit this comment."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        allowed_fields = {"kind", "body"}
+        incoming_fields = set(request.data.keys())
+
+        invalid_fields = incoming_fields - allowed_fields
+        if invalid_fields:
+            return Response(
+                {
+                    "detail": "Only 'kind' and 'body' can be updated.",
+                    "invalid_fields": sorted(list(invalid_fields)),
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        serializer = CommentSerializer(comment, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+
+        return Response(CommentSerializer(comment).data)
 
     def delete(self, request, comment_id):
         comment = get_object_or_404(Comment, id=comment_id)
@@ -603,6 +766,18 @@ class PodMembershipListCreateView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        create_notification(
+            recipient=invited_user,
+            notif_type="POD_INVITE",
+            actor=request.user,
+            payload={
+                "pod_id": pod.id,
+                "pod_name": getattr(pod, "name", None) or getattr(pod, "title", None),
+                "membership_id": membership.id,
+                "target_url": "/pods",
+            },
+        )
+
         return Response(
             PodMembershipSerializer(membership).data,
             status=status.HTTP_201_CREATED,
@@ -631,6 +806,36 @@ class PodMembershipAcceptView(APIView):
             )
 
         membership.accept()
+
+        pod = membership.pod
+
+        active_members_to_notify = [
+            pod_membership.user
+            for pod_membership in PodMembership.objects.filter(
+                pod=pod,
+                status="ACTIVE",
+            ).select_related("user")
+            if pod_membership.user_id != request.user.id
+        ]
+
+        create_bulk_notifications(
+            recipients=active_members_to_notify,
+            notif_type="POD_MEMBER_JOINED",
+            actor=request.user,
+            payload={
+                "pod_id": pod.id,
+                "pod_name": getattr(pod, "name", None) or getattr(pod, "title", None),
+                "membership_id": membership.id,
+                "target_url": f"/pods/{pod.id}",
+            },
+        )
+
+        resolve_notifications(
+            recipient=request.user,
+            notif_types=["POD_INVITE"],
+            payload_filters={"membership_id": membership.id},
+        )
+
         return Response({"detail": "Membership accepted."})
 
 
@@ -656,6 +861,28 @@ class PodMembershipDeclineView(APIView):
             )
 
         membership.decline()
+
+        pod = membership.pod
+
+        resolve_notifications(
+            recipient=request.user,
+            notif_types=["POD_INVITE"],
+            payload_filters={"membership_id": membership.id},
+        )
+
+        # Only keep this block if you added POD_INVITE_DECLINED to NOTIF_TYPE.
+        create_notification(
+            recipient=membership.invited_by,
+            notif_type="POD_INVITE_DECLINED",
+            actor=request.user,
+            payload={
+                "pod_id": pod.id,
+                "pod_name": getattr(pod, "name", None) or getattr(pod, "title", None),
+                "membership_id": membership.id,
+                "target_url": f"/pods/{pod.id}",
+            },
+        )
+
         return Response({"detail": "Membership declined."})
 
 
@@ -702,6 +929,29 @@ class PodGoalListCreateView(APIView):
             )
 
         goal = serializer.save(created_by=request.user)
+
+        active_members_to_notify = [
+            membership.user
+            for membership in PodMembership.objects.filter(
+                pod=pod,
+                status="ACTIVE",
+            ).select_related("user")
+            if membership.user_id != request.user.id
+        ]
+
+        create_bulk_notifications(
+            recipients=active_members_to_notify,
+            notif_type="POD_GOAL_CREATED",
+            actor=request.user,
+            payload={
+                "pod_id": pod.id,
+                "pod_name": getattr(pod, "name", None) or getattr(pod, "title", None),
+                "pod_goal_id": goal.id,
+                "pod_goal_title": getattr(goal, "title", None),
+                "target_url": f"/pods/{pod.id}/goals/{goal.id}",
+            },
+        )
+
         return Response(PodGoalSerializer(goal).data, status=status.HTTP_201_CREATED)
 
 
@@ -807,6 +1057,31 @@ class PodCheckInListCreateView(APIView):
             )
 
         checkin = serializer.save(created_by=request.user)
+        pod = pod_goal.pod
+
+        active_reviewers = [
+            membership.user
+            for membership in PodMembership.objects.filter(
+                pod=pod,
+                status="ACTIVE",
+            ).select_related("user")
+            if membership.user_id != request.user.id
+        ]
+
+        create_bulk_notifications(
+            recipients=active_reviewers,
+            notif_type="POD_CHECKIN_SUBMITTED",
+            actor=request.user,
+            payload={
+                "pod_id": pod.id,
+                "pod_name": getattr(pod, "name", None) or getattr(pod, "title", None),
+                "pod_goal_id": pod_goal.id,
+                "pod_goal_title": getattr(pod_goal, "title", None),
+                "pod_checkin_id": checkin.id,
+                "target_url": f"/pods/{pod.id}/goals/{pod_goal.id}",
+            },
+        )
+
         return Response(
             PodCheckInSerializer(checkin).data,
             status=status.HTTP_201_CREATED,
@@ -842,6 +1117,36 @@ class PodCheckInApproveView(APIView):
             )
 
         checkin.approve(request.user)
+
+        create_notification(
+            recipient=checkin.created_by,
+            notif_type="POD_CHECKIN_APPROVED",
+            actor=request.user,
+            payload={
+                "pod_id": pod.id,
+                "pod_name": getattr(pod, "name", None) or getattr(pod, "title", None),
+                "pod_goal_id": checkin.pod_goal.id,
+                "pod_goal_title": getattr(checkin.pod_goal, "title", None),
+                "pod_checkin_id": checkin.id,
+                "target_url": f"/pods/{pod.id}/goals/{checkin.pod_goal.id}",
+            },
+        )
+
+        active_reviewers = [
+            membership.user
+            for membership in PodMembership.objects.filter(
+                pod=pod,
+                status="ACTIVE",
+            ).select_related("user")
+            if membership.user_id != checkin.created_by_id
+        ]
+
+        resolve_notifications(
+            recipients=active_reviewers,
+            notif_types=["POD_CHECKIN_SUBMITTED"],
+            payload_filters={"pod_checkin_id": checkin.id},
+        )
+
         return Response({"detail": "Approved."})
 
 
@@ -875,6 +1180,37 @@ class PodCheckInRejectView(APIView):
 
         reason = (request.data.get("reason") or "").strip()
         checkin.reject(request.user, reason)
+
+        create_notification(
+            recipient=checkin.created_by,
+            notif_type="POD_CHECKIN_REJECTED",
+            actor=request.user,
+            payload={
+                "pod_id": pod.id,
+                "pod_name": getattr(pod, "name", None) or getattr(pod, "title", None),
+                "pod_goal_id": checkin.pod_goal.id,
+                "pod_goal_title": getattr(checkin.pod_goal, "title", None),
+                "pod_checkin_id": checkin.id,
+                "reason": reason,
+                "target_url": f"/pods/{pod.id}/goals/{checkin.pod_goal.id}",
+            },
+        )
+
+        active_reviewers = [
+            membership.user
+            for membership in PodMembership.objects.filter(
+                pod=pod,
+                status="ACTIVE",
+            ).select_related("user")
+            if membership.user_id != checkin.created_by_id
+        ]
+
+        resolve_notifications(
+            recipients=active_reviewers,
+            notif_types=["POD_CHECKIN_SUBMITTED"],
+            payload_filters={"pod_checkin_id": checkin.id},
+        )
+
         return Response({"detail": "Rejected.", "reason": reason})
 
 
@@ -1003,9 +1339,44 @@ class PodCommentListCreateView(APIView):
 
 class PodCommentDetailView(APIView):
     """
-    DELETE /api/pod-comments/<comment_id>/
+    PATCH  /api/pod-comments/<comment_id>/   -> update one pod comment (author only)
+    DELETE /api/pod-comments/<comment_id>/   -> delete one pod comment
     """
     permission_classes = [IsAuthenticated]
+
+    def patch(self, request, comment_id):
+        comment = get_object_or_404(PodComment, id=comment_id)
+
+        if not is_active_member(request.user, comment.pod_goal.pod):
+            return Response(
+                {"detail": "You are not an ACTIVE member of this pod."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        if comment.author_id != request.user.id:
+            return Response(
+                {"detail": "Only the comment author can edit this pod comment."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        allowed_fields = {"kind", "body"}
+        incoming_fields = set(request.data.keys())
+
+        invalid_fields = incoming_fields - allowed_fields
+        if invalid_fields:
+            return Response(
+                {
+                    "detail": "Only 'kind' and 'body' can be updated.",
+                    "invalid_fields": sorted(list(invalid_fields)),
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        serializer = PodCommentSerializer(comment, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+
+        return Response(PodCommentSerializer(comment).data)
 
     def delete(self, request, comment_id):
         comment = get_object_or_404(PodComment, id=comment_id)
@@ -1036,7 +1407,6 @@ class ConnectionListCreateView(APIView):
     POST /api/connections/ -> create a connection invite
     """
     permission_classes = [IsAuthenticated]
-    
 
     def get(self, request):
         connections = Connection.objects.filter(
@@ -1057,17 +1427,35 @@ class ConnectionListCreateView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        connection = Connection(
+            inviter=request.user,
+            invitee=invitee,
+            status="PENDING",
+        )
+
         try:
-            connection = Connection.objects.create(
-                inviter=request.user,
-                invitee=invitee,
-                status="PENDING",
+            connection.full_clean()
+            connection.save()
+        except DjangoValidationError as e:
+            return Response(
+                {"detail": e.messages[0]},
+                status=status.HTTP_400_BAD_REQUEST,
             )
         except IntegrityError:
             return Response(
                 {"detail": "A connection between these users already exists."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+
+        create_notification(
+            recipient=invitee,
+            notif_type="CONNECTION_INVITE",
+            actor=request.user,
+            payload={
+                "connection_id": connection.id,
+                "target_url": "/connections",
+            },
+        )
 
         return Response(
             ConnectionSerializer(connection).data,
@@ -1097,6 +1485,23 @@ class ConnectionAcceptView(APIView):
             )
 
         connection.accept()
+
+        create_notification(
+            recipient=connection.inviter,
+            notif_type="CONNECTION_ACCEPTED",
+            actor=request.user,
+            payload={
+                "connection_id": connection.id,
+                "target_url": "/connections",
+            },
+        )
+
+        resolve_notifications(
+            recipient=request.user,
+            notif_types=["CONNECTION_INVITE"],
+            payload_filters={"connection_id": connection.id},
+        )
+
         return Response({"detail": "Connection accepted."})
 
 
@@ -1122,4 +1527,144 @@ class ConnectionDeclineView(APIView):
             )
 
         connection.decline()
+
+        create_notification(
+            recipient=connection.inviter,
+            notif_type="CONNECTION_DECLINED",
+            actor=request.user,
+            payload={
+                "connection_id": connection.id,
+                "target_url": "/connections",
+            },
+        )
+
+        resolve_notifications(
+            recipient=request.user,
+            notif_types=["CONNECTION_INVITE"],
+            payload_filters={"connection_id": connection.id},
+        )
+
         return Response({"detail": "Connection declined."})
+    
+# ------------------------------------------------------------
+# NOTIFICATIONS
+# ------------------------------------------------------------
+
+VALID_NOTIFICATION_TABS = {"all", "unread", "needs_review"}
+
+
+def apply_tab_filter(queryset, tab):
+    if tab == "all":
+        return queryset
+    if tab == "unread":
+        return queryset.unread()
+    if tab == "needs_review":
+        return queryset.needs_review()
+
+    raise ValidationError(
+        {"tab": "Invalid tab. Use 'all', 'unread', or 'needs_review'."}
+    )
+
+
+class NotificationListView(generics.ListAPIView):
+    serializer_class = NotificationSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        queryset = (
+            Notification.objects.with_related()
+            .for_user(self.request.user)
+            .order_by("-created_at")
+        )
+
+        tab = self.request.query_params.get("tab", "all")
+        queryset = apply_tab_filter(queryset, tab)
+
+        limit = self.request.query_params.get("limit")
+        if limit:
+            try:
+                limit = max(1, min(int(limit), 50))
+            except ValueError:
+                raise ValidationError({"limit": "Limit must be a whole number."})
+            queryset = queryset[:limit]
+
+        return queryset
+
+
+class NotificationSummaryView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        base_queryset = Notification.objects.for_user(request.user)
+
+        data = {
+            "all_count": base_queryset.count(),
+            "unread_count": base_queryset.unread().count(),
+            "needs_review_count": base_queryset.needs_review().count(),
+            "unread_needs_review_count": base_queryset.needs_review().unread().count(),
+        }
+        return Response(data)
+
+
+class NotificationMarkReadView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, notification_id):
+        notification = get_object_or_404(
+            Notification,
+            id=notification_id,
+            recipient=request.user,
+        )
+        notification.mark_read()
+
+        return Response(NotificationSerializer(notification).data)
+
+
+class NotificationMarkUnreadView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, notification_id):
+        notification = get_object_or_404(
+            Notification,
+            id=notification_id,
+            recipient=request.user,
+        )
+        notification.mark_unread()
+
+        return Response(NotificationSerializer(notification).data)
+
+
+class NotificationResolveView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, notification_id):
+        notification = get_object_or_404(
+            Notification,
+            id=notification_id,
+            recipient=request.user,
+        )
+        notification.mark_resolved(mark_read=True)
+
+        return Response(NotificationSerializer(notification).data)
+
+
+class NotificationMarkAllReadView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        tab = request.data.get("tab", "all")
+        queryset = Notification.objects.for_user(request.user)
+        queryset = apply_tab_filter(queryset, tab)
+
+        now = timezone.now()
+        updated = queryset.filter(is_read=False).update(
+            is_read=True,
+            read_at=now,
+        )
+
+        return Response(
+            {
+                "detail": "Notifications marked as read.",
+                "updated_count": updated,
+            }
+        )

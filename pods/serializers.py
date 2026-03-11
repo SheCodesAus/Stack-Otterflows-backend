@@ -10,6 +10,7 @@ from .models import (
     CheckIn,
     Comment,
     PodComment,
+    Notification
 )
 
 
@@ -32,15 +33,15 @@ class GoalSerializer(serializers.ModelSerializer):
             "unit_label",
             "start_date",
             "end_date",
-            "is_active",
+            "status",
             "created_at",
             "updated_at",
         ]
         read_only_fields = ["id", "owner", "created_at", "updated_at"]
 
     def validate(self, attrs):
-        start_date = attrs.get("start_date")
-        end_date = attrs.get("end_date")
+        start_date = attrs.get("start_date", getattr(self.instance, "start_date", None))
+        end_date = attrs.get("end_date", getattr(self.instance, "end_date", None))
 
         if start_date and end_date and end_date < start_date:
             raise serializers.ValidationError("end_date cannot be before start_date.")
@@ -152,6 +153,15 @@ class CommentSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ["id", "author", "created_at"]
 
+    def validate(self, attrs):
+        goal = attrs.get("goal", getattr(self.instance, "goal", None))
+        checkin = attrs.get("checkin", getattr(self.instance, "checkin", None))
+
+        if checkin and goal and checkin.goal_id != goal.id:
+            raise serializers.ValidationError("That check-in does not belong to this goal.")
+
+        return attrs
+
 
 class CommentDetailSerializer(serializers.ModelSerializer):
     author_username = serializers.CharField(source="author.username", read_only=True)
@@ -199,7 +209,7 @@ class GoalDetailSerializer(serializers.ModelSerializer):
             "unit_label",
             "start_date",
             "end_date",
-            "is_active",
+            "status",
             "created_at",
             "updated_at",
             "assignments",
@@ -285,7 +295,7 @@ class PodGoalSerializer(serializers.ModelSerializer):
             "unit_label",
             "start_date",
             "end_date",
-            "is_active",
+            "status",
             "created_by",
             "created_by_username",
             "created_by_display_name",
@@ -293,6 +303,15 @@ class PodGoalSerializer(serializers.ModelSerializer):
             "updated_at",
         ]
         read_only_fields = ["id", "created_by", "created_at", "updated_at"]
+
+    def validate(self, attrs):
+        start_date = attrs.get("start_date", getattr(self.instance, "start_date", None))
+        end_date = attrs.get("end_date", getattr(self.instance, "end_date", None))
+
+        if start_date and end_date and end_date < start_date:
+            raise serializers.ValidationError("end_date cannot be before start_date.")
+
+        return attrs
 
 
 class PodCheckInSerializer(serializers.ModelSerializer):
@@ -357,6 +376,15 @@ class PodCommentSerializer(serializers.ModelSerializer):
             "created_at",
         ]
         read_only_fields = ["id", "author", "created_at"]
+
+    def validate(self, attrs):
+        pod_goal = attrs.get("pod_goal", getattr(self.instance, "pod_goal", None))
+        checkin = attrs.get("checkin", getattr(self.instance, "checkin", None))
+
+        if checkin and pod_goal and checkin.pod_goal_id != pod_goal.id:
+            raise serializers.ValidationError("That pod check-in does not belong to this pod goal.")
+
+        return attrs
 
 
 class PodCommentDetailSerializer(serializers.ModelSerializer):
@@ -453,3 +481,53 @@ class ConnectionSerializer(serializers.ModelSerializer):
             "invitee_username",
             "invitee_display_name",
         ]
+# ------------------------------------------------------------
+# NOTIFICATIONS
+# ------------------------------------------------------------
+
+class NotificationSerializer(serializers.ModelSerializer):
+    type_label = serializers.CharField(source="get_notif_type_display", read_only=True)
+    actor_name = serializers.SerializerMethodField()
+    title = serializers.SerializerMethodField()
+    message = serializers.SerializerMethodField()
+    target_url = serializers.SerializerMethodField()
+    is_needs_review = serializers.SerializerMethodField()
+    is_action_required = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Notification
+        fields = [
+            "id",
+            "notif_type",
+            "type_label",
+            "actor_name",
+            "title",
+            "message",
+            "target_url",
+            "payload_json",
+            "is_read",
+            "read_at",
+            "is_resolved",
+            "resolved_at",
+            "is_needs_review",
+            "is_action_required",
+            "created_at",
+        ]
+
+    def get_actor_name(self, obj):
+        return obj.get_actor_name()
+
+    def get_title(self, obj):
+        return obj.get_title()
+
+    def get_message(self, obj):
+        return obj.get_message()
+
+    def get_target_url(self, obj):
+        return obj.get_target_url()
+
+    def get_is_needs_review(self, obj):
+        return obj.is_needs_review
+
+    def get_is_action_required(self, obj):
+        return obj.is_action_required

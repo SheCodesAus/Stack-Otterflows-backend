@@ -28,6 +28,12 @@ from .views import (
     ConnectionListCreateView,
     ConnectionAcceptView,
     ConnectionDeclineView,
+    NotificationListView,
+    NotificationSummaryView,
+    NotificationMarkReadView,
+    NotificationMarkUnreadView,
+    NotificationResolveView,
+    NotificationMarkAllReadView,
 )
 
 urlpatterns = [
@@ -77,4 +83,12 @@ urlpatterns = [
     path("connections/", ConnectionListCreateView.as_view(), name="connection-list-create"),
     path("connections/<int:connection_id>/accept/", ConnectionAcceptView.as_view(), name="connection-accept"),
     path("connections/<int:connection_id>/decline/", ConnectionDeclineView.as_view(), name="connection-decline"),
+
+    # Notifications
+    path("notifications/", NotificationListView.as_view(), name="notification-list"),
+    path("notifications/summary/", NotificationSummaryView.as_view(), name="notification-summary"),
+    path("notifications/read-all/", NotificationMarkAllReadView.as_view(), name="notification-read-all"),
+    path("notifications/<int:notification_id>/read/", NotificationMarkReadView.as_view(), name="notification-mark-read"),
+    path("notifications/<int:notification_id>/unread/", NotificationMarkUnreadView.as_view(), name="notification-mark-unread"),
+    path("notifications/<int:notification_id>/resolve/", NotificationResolveView.as_view(), name="notification-resolve"),
 ]
