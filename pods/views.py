@@ -182,6 +182,19 @@ class GoalAssignmentListCreateView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        is_connected = Connection.objects.filter(
+            status="ACCEPTED"
+        ).filter(
+            Q(inviter=request.user, invitee=buddy) |
+            Q(inviter=buddy, invitee=request.user)
+        ).exists()
+
+        if not is_connected:
+            return Response(
+                {"detail": "You can only assign an accepted connection as a buddy."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         try:
             assignment = GoalAssignment.objects.create(
                 goal=goal,

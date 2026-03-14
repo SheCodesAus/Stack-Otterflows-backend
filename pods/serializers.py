@@ -515,6 +515,7 @@ class NotificationSerializer(serializers.ModelSerializer):
     target_url = serializers.SerializerMethodField()
     is_needs_review = serializers.SerializerMethodField()
     is_action_required = serializers.SerializerMethodField()
+    assignment_id = serializers.SerializerMethodField()
 
     class Meta:
         model = Notification
@@ -527,6 +528,7 @@ class NotificationSerializer(serializers.ModelSerializer):
             "message",
             "target_url",
             "payload_json",
+            "assignment_id",
             "is_read",
             "read_at",
             "is_resolved",
@@ -553,6 +555,10 @@ class NotificationSerializer(serializers.ModelSerializer):
 
     def get_is_action_required(self, obj):
         return obj.is_action_required
+
+    def get_assignment_id(self, obj):
+        return (obj.payload_json or {}).get("assignment_id")
+
 
 class UserSearchSerializer(serializers.ModelSerializer):
     display_name = serializers.SerializerMethodField()
