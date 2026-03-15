@@ -1,4 +1,5 @@
 from django.contrib.auth import get_user_model
+from django.utils import timezone
 
 User = get_user_model()
 
@@ -114,8 +115,39 @@ class CheckInSerializer(serializers.ModelSerializer):
         ]
 
     def validate(self, attrs):
+        goal = attrs.get("goal") or getattr(self.instance, "goal", None)
+        period_start = attrs.get("period_start") or getattr(self.instance, "period_start", None)
+
         if self.instance and "goal" in attrs and attrs["goal"].id != self.instance.goal_id:
-            raise serializers.ValidationError("You cannot change the goal of an existing check-in.")
+            raise serializers.ValidationError(
+                "You cannot change the goal of an existing check-in."
+            )
+
+        if not goal or not period_start:
+            return attrs
+
+        today = timezone.localdate()
+
+        if goal.status == "PLANNED":
+            raise serializers.ValidationError({
+                "period_start": "You cannot add a check-in for a planned goal."
+            })
+
+        if goal.start_date and period_start < goal.start_date:
+            raise serializers.ValidationError({
+                "period_start": f"Check-ins cannot be before the goal start date ({goal.start_date})."
+            })
+
+        if goal.end_date and period_start > goal.end_date:
+            raise serializers.ValidationError({
+                "period_start": f"Check-ins cannot be after the goal end date ({goal.end_date})."
+            })
+
+        if period_start > today:
+            raise serializers.ValidationError({
+                "period_start": "You cannot create a check-in for a future date."
+            })
+
         return attrs
 
 

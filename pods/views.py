@@ -10,6 +10,7 @@ from rest_framework.views import APIView
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.contrib.auth import get_user_model
 from .services import create_notification, create_bulk_notifications, resolve_notifications
+from rest_framework.parsers import MultiPartParser, FormParser
 
 from .models import (
     Pod,
@@ -320,6 +321,7 @@ class CheckInListCreateView(APIView):
     POST /api/checkins/
     """
     permission_classes = [IsAuthenticated]
+    parser_classes = [MultiPartParser, FormParser]
 
     def get(self, request):
         goal_id = request.query_params.get("goal")
@@ -486,6 +488,7 @@ class CheckInDetailView(APIView):
     DELETE /api/checkins/<checkin_id>/   -> delete one check-in (creator only, pending only)
     """
     permission_classes = [IsAuthenticated]
+    parser_classes = [MultiPartParser, FormParser]
 
     def get(self, request, checkin_id):
         checkin = get_object_or_404(CheckIn, id=checkin_id)
