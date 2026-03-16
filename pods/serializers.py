@@ -1,9 +1,9 @@
 from django.contrib.auth import get_user_model
+from django.db.models import Q
 from django.utils import timezone
 
-User = get_user_model()
-
 from rest_framework import serializers
+
 from .models import (
     Pod,
     PodMembership,
@@ -15,8 +15,10 @@ from .models import (
     CheckIn,
     Comment,
     PodComment,
-    Notification
+    Notification,
 )
+
+User = get_user_model()
 
 
 # ------------------------------------------------------------
@@ -306,22 +308,6 @@ class PodSerializer(serializers.ModelSerializer):
         ]
 
 
-class PodMembershipSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = PodMembership
-        fields = [
-            "id",
-            "pod",
-            "user",
-            "role",
-            "status",
-            "invited_by",
-            "created_at",
-            "responded_at",
-        ]
-        read_only_fields = ["id", "role", "status", "invited_by", "created_at", "responded_at"]
-
-
 class PodMembershipDetailSerializer(serializers.ModelSerializer):
     user_username = serializers.CharField(source="user.username", read_only=True)
     user_display_name = serializers.CharField(source="user.display_name", read_only=True)
@@ -409,7 +395,9 @@ class PodCheckInSerializer(serializers.ModelSerializer):
 
     def validate(self, attrs):
         if self.instance and "pod_goal" in attrs and attrs["pod_goal"].id != self.instance.pod_goal_id:
-            raise serializers.ValidationError("You cannot change the pod goal of an existing check-in.")
+            raise serializers.ValidationError(
+                "You cannot change the pod goal of an existing check-in."
+            )
         return attrs
 
 
@@ -461,7 +449,9 @@ class PodCommentSerializer(serializers.ModelSerializer):
         checkin = attrs.get("checkin", getattr(self.instance, "checkin", None))
 
         if checkin and pod_goal and checkin.pod_goal_id != pod_goal.id:
-            raise serializers.ValidationError("That pod check-in does not belong to this pod goal.")
+            raise serializers.ValidationError(
+                "That pod check-in does not belong to this pod goal."
+            )
 
         return attrs
 
@@ -527,6 +517,36 @@ class PodDetailSerializer(serializers.ModelSerializer):
         ).order_by("-created_at")
         return PodCommentDetailSerializer(comments, many=True).data
 
+
+class PodInviteCandidateSerializer(serializers.ModelSerializer):
+    display_name = serializers.SerializerMethodField()
+    connection_status = serializers.SerializerMethodField()
+
+    class Meta:
+        model = User
+        fields = ["id", "username", "display_name", "connection_status"]
+        read_only_fields = fields
+
+    def get_display_name(self, obj):
+        return (
+            getattr(obj, "display_name", None)
+            or obj.get_full_name().strip()
+            or obj.username
+        )
+
+    def get_connection_status(self, obj):
+        request = self.context.get("request")
+        if not request or not request.user.is_authenticated:
+            return None
+
+        connection = Connection.objects.filter(
+            Q(inviter=request.user, invitee=obj)
+            | Q(inviter=obj, invitee=request.user)
+        ).first()
+
+        return connection.status if connection else None
+
+
 # ------------------------------------------------------------
 # CONNECTIONS
 # ------------------------------------------------------------
@@ -562,6 +582,24 @@ class ConnectionSerializer(serializers.ModelSerializer):
             "invitee_username",
             "invitee_display_name",
         ]
+
+
+class UserSearchSerializer(serializers.ModelSerializer):
+    display_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = User
+        fields = ["id", "username", "display_name"]
+        read_only_fields = fields
+
+    def get_display_name(self, obj):
+        return (
+            getattr(obj, "display_name", None)
+            or obj.get_full_name().strip()
+            or obj.username
+        )
+
+
 # ------------------------------------------------------------
 # NOTIFICATIONS
 # ------------------------------------------------------------
@@ -574,6 +612,8 @@ class NotificationSerializer(serializers.ModelSerializer):
     target_url = serializers.SerializerMethodField()
     is_needs_review = serializers.SerializerMethodField()
     is_action_required = serializers.SerializerMethodField()
+    membership_id = serializers.SerializerMethodField()
+    pod_id = serializers.SerializerMethodField()
     assignment_id = serializers.SerializerMethodField()
 
     class Meta:
@@ -588,6 +628,8 @@ class NotificationSerializer(serializers.ModelSerializer):
             "target_url",
             "payload_json",
             "assignment_id",
+            "membership_id",
+            "pod_id",
             "is_read",
             "read_at",
             "is_resolved",
@@ -617,19 +659,9 @@ class NotificationSerializer(serializers.ModelSerializer):
 
     def get_assignment_id(self, obj):
         return (obj.payload_json or {}).get("assignment_id")
+    
+    def get_membership_id(self, obj):
+        return (obj.payload_json or {}).get("membership_id")
 
-
-class UserSearchSerializer(serializers.ModelSerializer):
-    display_name = serializers.SerializerMethodField()
-
-    class Meta:
-        model = User
-        fields = ["id", "username", "display_name"]
-        read_only_fields = fields
-
-    def get_display_name(self, obj):
-        return (
-            getattr(obj, "display_name", None)
-            or obj.get_full_name().strip()
-            or obj.username
-        )
+    def get_pod_id(self, obj):
+        return (obj.payload_json or {}).get("pod_id")

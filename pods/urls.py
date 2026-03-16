@@ -35,6 +35,11 @@ from .views import (
     NotificationResolveView,
     NotificationMarkAllReadView,
     UserSearchView,
+    PodInviteCandidateView,
+    PodMembershipRoleUpdateView,
+    PodMembershipRemoveView,
+    PodMembershipCancelView,
+    PodMembershipResendView,
 )
 
 urlpatterns = [
@@ -66,6 +71,27 @@ urlpatterns = [
     path("pod-memberships/<int:membership_id>/accept/", PodMembershipAcceptView.as_view(), name="pod-membership-accept"),
     path("pod-memberships/<int:membership_id>/decline/", PodMembershipDeclineView.as_view(), name="pod-membership-decline"),
 
+    path(
+        "pod-memberships/<int:membership_id>/role/",
+        PodMembershipRoleUpdateView.as_view(),
+        name="pod-membership-role-update",
+    ),
+    path(
+        "pod-memberships/<int:membership_id>/remove/",
+        PodMembershipRemoveView.as_view(),
+        name="pod-membership-remove",
+    ),
+    path(
+        "pod-memberships/<int:membership_id>/cancel/",
+        PodMembershipCancelView.as_view(),
+        name="pod-membership-cancel",
+    ),
+    path(
+        "pod-memberships/<int:membership_id>/resend/",
+        PodMembershipResendView.as_view(),
+        name="pod-membership-resend",
+    ),
+
     # Pod goals
     path("pod-goals/", PodGoalListCreateView.as_view(), name="pod-goal-list-create"),
     path("pod-goals/<int:pod_goal_id>/", PodGoalDetailView.as_view(), name="pod-goal-detail"),
@@ -79,6 +105,13 @@ urlpatterns = [
     # Pod comments
     path("pod-comments/", PodCommentListCreateView.as_view(), name="pod-comment-list-create"),
     path("pod-comments/<int:comment_id>/", PodCommentDetailView.as_view(), name="pod-comment-detail"),
+
+    # Pod Invite Candidate View
+    path(
+    "pods/<int:pod_id>/invite-candidates/",
+    PodInviteCandidateView.as_view(),
+    name="pod-invite-candidates",
+),
 
     # User Search
     path("users/search/", UserSearchView.as_view(), name="user-search"),

@@ -1,16 +1,16 @@
+from django.contrib.auth import get_user_model
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import IntegrityError
 from django.db.models import Count, Q
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
-from rest_framework.exceptions import ValidationError
+
 from rest_framework import generics, status
+from rest_framework.exceptions import ValidationError
+from rest_framework.parsers import MultiPartParser, FormParser
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
-from django.core.exceptions import ValidationError as DjangoValidationError
-from django.contrib.auth import get_user_model
-from .services import create_notification, create_bulk_notifications, resolve_notifications
-from rest_framework.parsers import MultiPartParser, FormParser
 
 from .models import (
     Pod,
@@ -26,9 +26,15 @@ from .models import (
     Notification,
 )
 
+from .permissions import (
+    is_active_member,
+    is_goal_owner,
+    can_view_goal,
+    can_verify_individual_checkin,
+)
+
 from .serializers import (
     PodSerializer,
-    PodMembershipSerializer,
     PodGoalSerializer,
     PodCheckInSerializer,
     ConnectionSerializer,
@@ -43,15 +49,17 @@ from .serializers import (
     PodCheckInDetailSerializer,
     NotificationSerializer,
     UserSearchSerializer,
+    PodMembershipDetailSerializer,
+    PodInviteCandidateSerializer,
 )
 
-from .permissions import (
-    is_active_member,
-    is_goal_owner,
-    can_view_goal,
-    can_verify_individual_checkin,
+from .services import (
+    create_notification,
+    create_bulk_notifications,
+    resolve_notifications,
 )
 
+User = get_user_model()
 # ------------------------------------------------------------
 # INDIVIDUAL GOALS
 # ------------------------------------------------------------
@@ -779,6 +787,7 @@ class PodDetailView(APIView):
 # POD MEMBERSHIPS
 # ------------------------------------------------------------
 
+
 class PodMembershipListCreateView(APIView):
     """
     GET  /api/pod-memberships/?pod=<pod_id>
@@ -805,17 +814,23 @@ class PodMembershipListCreateView(APIView):
                 )
 
             memberships = PodMembership.objects.filter(pod=pod).order_by("-created_at")
-            return Response(PodMembershipSerializer(memberships, many=True).data)
+            return Response(PodMembershipDetailSerializer(memberships, many=True).data)
 
         memberships = PodMembership.objects.filter(user=request.user).order_by("-created_at")
-        return Response(PodMembershipSerializer(memberships, many=True).data)
+        return Response(PodMembershipDetailSerializer(memberships, many=True).data)
 
     def post(self, request):
-        serializer = PodMembershipSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
+        pod_id = request.data.get("pod")
+        invited_user_id = request.data.get("user")
 
-        pod = serializer.validated_data["pod"]
-        invited_user = serializer.validated_data["user"]
+        if not pod_id or not invited_user_id:
+            return Response(
+                {"detail": "Both pod and user are required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        pod = get_object_or_404(Pod, id=pod_id)
+        invited_user = get_object_or_404(User, id=invited_user_id)
 
         if not is_active_member(request.user, pod):
             return Response(
@@ -829,16 +844,47 @@ class PodMembershipListCreateView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        try:
-            membership = serializer.save(
+        is_connected = Connection.objects.filter(
+            (
+                Q(inviter=request.user, invitee=invited_user)
+                | Q(inviter=invited_user, invitee=request.user)
+            ),
+            status="ACCEPTED",
+        ).exists()
+
+        if not is_connected:
+            return Response(
+                {"detail": "You can only invite accepted connections into a pod."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        existing_membership = PodMembership.objects.filter(
+            pod=pod,
+            user=invited_user,
+        ).first()
+
+        if existing_membership:
+            if existing_membership.status in ["DECLINED", "LEFT", "REMOVED"]:
+                existing_membership.status = "INVITED"
+                existing_membership.role = "MEMBER"
+                existing_membership.invited_by = request.user
+                existing_membership.responded_at = None
+                existing_membership.save(
+                    update_fields=["status", "role", "invited_by", "responded_at"]
+                )
+                membership = existing_membership
+            else:
+                return Response(
+                    {"detail": "That user already has an active or pending membership for this pod."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+        else:
+            membership = PodMembership.objects.create(
+                pod=pod,
+                user=invited_user,
                 invited_by=request.user,
                 status="INVITED",
                 role="MEMBER",
-            )
-        except IntegrityError:
-            return Response(
-                {"detail": "That user already has a membership for this pod."},
-                status=status.HTTP_400_BAD_REQUEST,
             )
 
         create_notification(
@@ -849,12 +895,12 @@ class PodMembershipListCreateView(APIView):
                 "pod_id": pod.id,
                 "pod_name": getattr(pod, "name", None) or getattr(pod, "title", None),
                 "membership_id": membership.id,
-                "target_url": "/pods",
+                "target_url": "/notifications",
             },
         )
 
         return Response(
-            PodMembershipSerializer(membership).data,
+            PodMembershipDetailSerializer(membership).data,
             status=status.HTTP_201_CREATED,
         )
 
@@ -959,8 +1005,268 @@ class PodMembershipDeclineView(APIView):
         )
 
         return Response({"detail": "Membership declined."})
+    
+class PodMembershipRoleUpdateView(APIView):
+    """
+    PATCH /api/pod-memberships/<membership_id>/role/
 
+    Body:
+    {
+        "role": "ADMIN"   # or "MEMBER"
+    }
 
+    Rules:
+    - only ACTIVE pod owners can change roles
+    - only ACTIVE memberships can be changed
+    - cannot change an OWNER with this endpoint
+    - cannot change your own role with this endpoint
+    """
+    permission_classes = [IsAuthenticated]
+
+    def patch(self, request, membership_id):
+        membership = get_object_or_404(
+            PodMembership.objects.select_related("pod", "user"),
+            id=membership_id,
+        )
+        pod = membership.pod
+
+        acting_membership = PodMembership.objects.filter(
+            pod=pod,
+            user=request.user,
+            status="ACTIVE",
+        ).first()
+
+        if not acting_membership:
+            return Response(
+                {"detail": "You are not an ACTIVE member of this pod."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        if acting_membership.role != "OWNER":
+            return Response(
+                {"detail": "Only pod owners can change member roles."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        if membership.status != "ACTIVE":
+            return Response(
+                {"detail": "Only ACTIVE memberships can have roles updated."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if membership.user_id == request.user.id:
+            return Response(
+                {"detail": "You cannot change your own role here."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if membership.role == "OWNER":
+            return Response(
+                {"detail": "Owner roles must be changed through a separate ownership transfer flow."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        new_role = (request.data.get("role") or "").strip().upper()
+
+        if new_role not in ["ADMIN", "MEMBER"]:
+            return Response(
+                {"detail": "Role must be either ADMIN or MEMBER."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if membership.role == new_role:
+            return Response(PodMembershipDetailSerializer(membership).data)
+
+        membership.role = new_role
+        membership.save(update_fields=["role"])
+
+        return Response(PodMembershipDetailSerializer(membership).data)
+
+class PodMembershipRemoveView(APIView):
+    """
+    POST /api/pod-memberships/<membership_id>/remove/
+
+    Rules:
+    - ACTIVE owners/admins can remove people
+    - admins can only remove MEMBER roles
+    - owners can remove ADMIN or MEMBER roles
+    - cannot remove an OWNER with this endpoint
+    - cannot remove yourself here
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, membership_id):
+        membership = get_object_or_404(
+            PodMembership.objects.select_related("pod", "user"),
+            id=membership_id,
+        )
+        pod = membership.pod
+
+        acting_membership = PodMembership.objects.filter(
+            pod=pod,
+            user=request.user,
+            status="ACTIVE",
+        ).first()
+
+        if not acting_membership:
+            return Response(
+                {"detail": "You are not an ACTIVE member of this pod."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        if acting_membership.role not in ["OWNER", "ADMIN"]:
+            return Response(
+                {"detail": "Only pod owners or admins can remove members."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        if membership.status != "ACTIVE":
+            return Response(
+                {"detail": "Only ACTIVE members can be removed."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if membership.user_id == request.user.id:
+            return Response(
+                {"detail": "You cannot remove yourself with this endpoint. Use a leave-pod flow instead."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if membership.role == "OWNER":
+            return Response(
+                {"detail": "Owners cannot be removed here. Transfer ownership first."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if acting_membership.role == "ADMIN" and membership.role != "MEMBER":
+            return Response(
+                {"detail": "Admins can only remove members."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        membership.status = "REMOVED"
+        membership.responded_at = timezone.now()
+        membership.save(update_fields=["status", "responded_at"])
+
+        return Response(PodMembershipDetailSerializer(membership).data)
+    
+class PodMembershipCancelView(APIView):
+    """
+    POST /api/pod-memberships/<membership_id>/cancel/
+
+    Rules:
+    - ACTIVE owners/admins can cancel pending invites
+    - only INVITED memberships can be cancelled
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, membership_id):
+        membership = get_object_or_404(
+            PodMembership.objects.select_related("pod", "user"),
+            id=membership_id,
+        )
+        pod = membership.pod
+
+        acting_membership = PodMembership.objects.filter(
+            pod=pod,
+            user=request.user,
+            status="ACTIVE",
+        ).first()
+
+        if not acting_membership:
+            return Response(
+                {"detail": "You are not an ACTIVE member of this pod."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        if acting_membership.role not in ["OWNER", "ADMIN"]:
+            return Response(
+                {"detail": "Only pod owners or admins can cancel invites."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        if membership.status != "INVITED":
+            return Response(
+                {"detail": "Only pending invites can be cancelled."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        membership.status = "REMOVED"
+        membership.responded_at = timezone.now()
+        membership.save(update_fields=["status", "responded_at"])
+
+        resolve_notifications(
+            recipient=membership.user,
+            notif_types=["POD_INVITE"],
+            payload_filters={"membership_id": membership.id},
+        )
+
+        return Response(PodMembershipDetailSerializer(membership).data)
+    
+class PodMembershipResendView(APIView):
+    """
+    POST /api/pod-memberships/<membership_id>/resend/
+
+    Rules:
+    - ACTIVE owners/admins can resend pending invites
+    - only INVITED memberships can be resent
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, membership_id):
+        membership = get_object_or_404(
+            PodMembership.objects.select_related("pod", "user"),
+            id=membership_id,
+        )
+        pod = membership.pod
+
+        acting_membership = PodMembership.objects.filter(
+            pod=pod,
+            user=request.user,
+            status="ACTIVE",
+        ).first()
+
+        if not acting_membership:
+            return Response(
+                {"detail": "You are not an ACTIVE member of this pod."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        if acting_membership.role not in ["OWNER", "ADMIN"]:
+            return Response(
+                {"detail": "Only pod owners or admins can resend invites."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        if membership.status != "INVITED":
+            return Response(
+                {"detail": "Only pending invites can be resent."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        membership.invited_by = request.user
+        membership.responded_at = None
+        membership.save(update_fields=["invited_by", "responded_at"])
+
+        resolve_notifications(
+            recipient=membership.user,
+            notif_types=["POD_INVITE"],
+            payload_filters={"membership_id": membership.id},
+        )
+
+        create_notification(
+            recipient=membership.user,
+            notif_type="POD_INVITE",
+            actor=request.user,
+            payload={
+                "pod_id": pod.id,
+                "pod_name": getattr(pod, "name", None) or getattr(pod, "title", None),
+                "membership_id": membership.id,
+                "target_url": "/notifications",
+            },
+        )
+
+        return Response(PodMembershipDetailSerializer(membership).data)    
 # ------------------------------------------------------------
 # POD GOALS
 # ------------------------------------------------------------
@@ -1811,3 +2117,73 @@ class UserSearchView(APIView):
         )
 
         return Response(UserSearchSerializer(users, many=True).data)
+    
+
+
+class PodInviteCandidateView(APIView):
+    """
+    GET /api/pods/<pod_id>/invite-candidates/?q=beck
+
+    Returns accepted connections who can be invited into the pod.
+    Excludes:
+    - current user
+    - users already ACTIVE in this pod
+    - users already INVITED to this pod
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, pod_id):
+        pod = get_object_or_404(Pod, id=pod_id)
+
+        if not is_active_member(request.user, pod):
+            return Response(
+                {"detail": "You are not an ACTIVE member of this pod."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        query = (request.query_params.get("q") or "").strip()
+
+        if len(query) < 2:
+            return Response([])
+
+        searchable_fields = ["username", "first_name", "last_name", "email"]
+
+        if any(field.name == "display_name" for field in User._meta.get_fields()):
+            searchable_fields.append("display_name")
+
+        filters = Q()
+        for field in searchable_fields:
+            filters |= Q(**{f"{field}__icontains": query})
+
+        accepted_connections = Connection.objects.filter(
+            Q(inviter=request.user) | Q(invitee=request.user),
+            status="ACCEPTED",
+        )
+
+        accepted_ids = set()
+        for connection in accepted_connections:
+            if connection.inviter_id == request.user.id:
+                accepted_ids.add(connection.invitee_id)
+            else:
+                accepted_ids.add(connection.inviter_id)
+
+        unavailable_ids = PodMembership.objects.filter(
+            pod=pod,
+            status__in=["ACTIVE", "INVITED"],
+        ).values_list("user_id", flat=True)
+
+        users = (
+            User.objects.filter(id__in=accepted_ids)
+            .filter(filters)
+            .exclude(id=request.user.id)
+            .exclude(id__in=unavailable_ids)
+            .order_by("username")[:10]
+        )
+
+        return Response(
+            PodInviteCandidateSerializer(
+                users,
+                many=True,
+                context={"request": request},
+            ).data
+        )
