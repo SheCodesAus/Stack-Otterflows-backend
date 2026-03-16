@@ -534,17 +534,36 @@ class Notification(models.Model):
 # POD MODEL (for groups)
 # ------------------------------------------------------------
 
+User = settings.AUTH_USER_MODEL
+
+POD_CATEGORY_CHOICES = [
+    ("FITNESS", "Fitness"),
+    ("EDUCATION", "Education"),
+    ("CAREER", "Career"),
+    ("CREATIVE", "Creative"),
+    ("WELLBEING", "Wellbeing"),
+    ("OTHER", "Other"),
+]
+
 class Pod(models.Model):
     name = models.CharField(max_length=120)
     description = models.TextField(blank=True)
+    category = models.CharField(
+        max_length=20,
+        choices=POD_CATEGORY_CHOICES,
+        default="OTHER",
+    )
 
-    created_by = models.ForeignKey(User, on_delete=models.CASCADE, related_name="pods_created")
+    created_by = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name="pods_created",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     is_active = models.BooleanField(default=True)
 
     def __str__(self):
         return self.name
-
 
 # ------------------------------------------------------------
 # POD MEMBERSHIP

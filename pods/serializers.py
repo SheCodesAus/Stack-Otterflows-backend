@@ -275,10 +275,35 @@ class GoalDetailSerializer(serializers.ModelSerializer):
 # ------------------------------------------------------------
 
 class PodSerializer(serializers.ModelSerializer):
+    category_display = serializers.CharField(
+        source="get_category_display",
+        read_only=True,
+    )
+    member_count = serializers.IntegerField(read_only=True)
+    active_goal_count = serializers.IntegerField(read_only=True)
+
     class Meta:
         model = Pod
-        fields = ["id", "name", "description", "created_by", "created_at", "is_active"]
-        read_only_fields = ["id", "created_by", "created_at"]
+        fields = [
+            "id",
+            "name",
+            "description",
+            "category",
+            "category_display",
+            "created_by",
+            "created_at",
+            "is_active",
+            "member_count",
+            "active_goal_count",
+        ]
+        read_only_fields = [
+            "id",
+            "created_by",
+            "created_at",
+            "category_display",
+            "member_count",
+            "active_goal_count",
+        ]
 
 
 class PodMembershipSerializer(serializers.ModelSerializer):
@@ -464,6 +489,7 @@ class PodCommentDetailSerializer(serializers.ModelSerializer):
 class PodDetailSerializer(serializers.ModelSerializer):
     created_by_username = serializers.CharField(source="created_by.username", read_only=True)
     created_by_display_name = serializers.CharField(source="created_by.display_name", read_only=True)
+    category_display = serializers.CharField(source="get_category_display", read_only=True)
     memberships = PodMembershipDetailSerializer(many=True, read_only=True)
     pod_goals = PodGoalSerializer(source="goals", many=True, read_only=True)
     pod_checkins = serializers.SerializerMethodField()
@@ -475,6 +501,8 @@ class PodDetailSerializer(serializers.ModelSerializer):
             "id",
             "name",
             "description",
+            "category",
+            "category_display",
             "created_by",
             "created_by_username",
             "created_by_display_name",
@@ -498,7 +526,6 @@ class PodDetailSerializer(serializers.ModelSerializer):
             pod_goal__pod=obj
         ).order_by("-created_at")
         return PodCommentDetailSerializer(comments, many=True).data
-
 
 # ------------------------------------------------------------
 # CONNECTIONS

@@ -1,5 +1,5 @@
 from django.db import IntegrityError
-from django.db.models import Q
+from django.db.models import Count, Q
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework.exceptions import ValidationError
@@ -674,17 +674,31 @@ class CommentDetailView(APIView):
 # ------------------------------------------------------------
 
 class PodListCreateView(APIView):
-    """
-    GET  /api/pods/ -> list pods where I am ACTIVE member
-    POST /api/pods/ -> create a pod and auto-create OWNER membership for me
-    """
     permission_classes = [IsAuthenticated]
 
+    def get_queryset(self, request):
+        return (
+            Pod.objects.filter(
+                memberships__user=request.user,
+                memberships__status="ACTIVE",
+            )
+            .annotate(
+                member_count=Count(
+                    "memberships",
+                    filter=Q(memberships__status="ACTIVE"),
+                    distinct=True,
+                ),
+                active_goal_count=Count(
+                    "goals",
+                    filter=Q(goals__status="ACTIVE"),
+                    distinct=True,
+                ),
+            )
+            .distinct()
+        )
+
     def get(self, request):
-        pods = Pod.objects.filter(
-            memberships__user=request.user,
-            memberships__status="ACTIVE",
-        ).distinct()
+        pods = self.get_queryset(request)
         return Response(PodSerializer(pods, many=True).data)
 
     def post(self, request):
@@ -700,17 +714,19 @@ class PodListCreateView(APIView):
             invited_by=request.user,
         )
 
+        pod = self.get_queryset(request).get(pk=pod.pk)
         return Response(PodSerializer(pod).data, status=status.HTTP_201_CREATED)
 
 
 class PodDetailView(APIView):
     """
-    GET /api/pods/<pod_id>/ -> retrieve pod
+    GET    /api/pods/<pod_id>/ -> retrieve pod
+    PATCH  /api/pods/<pod_id>/ -> update pod
     """
     permission_classes = [IsAuthenticated]
 
-    def get(self, request, pod_id):
-        pod = get_object_or_404(
+    def get_object(self, pod_id):
+        return get_object_or_404(
             Pod.objects.prefetch_related(
                 "memberships__user",
                 "goals__created_by",
@@ -721,6 +737,9 @@ class PodDetailView(APIView):
             id=pod_id,
         )
 
+    def get(self, request, pod_id):
+        pod = self.get_object(pod_id)
+
         if not is_active_member(request.user, pod):
             return Response(
                 {"detail": "You are not an ACTIVE member of this pod."},
@@ -728,6 +747,33 @@ class PodDetailView(APIView):
             )
 
         return Response(PodDetailSerializer(pod).data)
+
+    def patch(self, request, pod_id):
+        pod = get_object_or_404(Pod, id=pod_id)
+
+        if not is_active_member(request.user, pod):
+            return Response(
+                {"detail": "You are not an ACTIVE member of this pod."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        membership = PodMembership.objects.filter(
+            pod=pod,
+            user=request.user,
+            status="ACTIVE",
+        ).first()
+
+        if not membership or membership.role not in ["OWNER", "ADMIN"]:
+            return Response(
+                {"detail": "Only pod owners or admins can update this pod."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        serializer = PodSerializer(pod, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+
+        return Response(PodSerializer(pod).data)
 
 # ------------------------------------------------------------
 # POD MEMBERSHIPS
