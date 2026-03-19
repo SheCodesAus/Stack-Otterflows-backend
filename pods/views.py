@@ -1,3 +1,6 @@
+import uuid
+
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import IntegrityError
@@ -24,6 +27,7 @@ from .models import (
     Comment,
     PodComment,
     Notification,
+    ConnectionQrInvite,
 )
 
 from .permissions import (
@@ -1945,7 +1949,108 @@ class ConnectionDeclineView(APIView):
         )
 
         return Response({"detail": "Connection declined."})
-    
+
+class ConnectionQrInviteCreateView(APIView):
+    """
+    POST /api/connection-invites/qr/
+    Returns an active QR invite URL for the logged-in user.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        invite = ConnectionQrInvite.objects.filter(
+            owner=request.user,
+            is_active=True,
+            expires_at__gt=timezone.now(),
+        ).first()
+
+        if not invite:
+            invite = ConnectionQrInvite.objects.create(owner=request.user)
+
+        invite_url = f"{settings.FRONTEND_URL}/connections/claim/{invite.token}"
+
+        return Response(
+            {
+                "token": str(invite.token),
+                "invite_url": invite_url,
+                "expires_at": invite.expires_at,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+class ConnectionQrInviteClaimView(APIView):
+    """
+    POST /api/connection-invites/qr/<token>/claim/
+    Creates a normal pending Connection from QR owner -> current user.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, token):
+        try:
+            parsed_token = uuid.UUID(str(token))
+        except ValueError:
+            return Response(
+                {"detail": "Invalid invite token."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        invite = ConnectionQrInvite.objects.filter(
+            token=parsed_token,
+            is_active=True,
+            expires_at__gt=timezone.now(),
+        ).select_related("owner").first()
+
+        if not invite:
+            return Response(
+                {"detail": "This QR invite is invalid or has expired."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        if invite.owner_id == request.user.id:
+            return Response(
+                {"detail": "You cannot claim your own QR invite."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        connection = Connection(
+            inviter=invite.owner,
+            invitee=request.user,
+            status="PENDING",
+        )
+
+        try:
+            connection.full_clean()
+            connection.save()
+        except DjangoValidationError as e:
+            return Response(
+                {"detail": e.messages[0]},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        except IntegrityError:
+            return Response(
+                {"detail": "A connection between these users already exists."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        create_notification(
+            recipient=invite.owner,
+            notif_type="CONNECTION_INVITE",
+            actor=request.user,
+            payload={
+                "connection_id": connection.id,
+                "target_url": "/connections",
+            },
+        )
+
+        return Response(
+            {
+                "detail": "Connection invite sent.",
+                "connection": ConnectionSerializer(connection).data,
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
 # ------------------------------------------------------------
 # NOTIFICATIONS
 # ------------------------------------------------------------

@@ -40,6 +40,8 @@ from .views import (
     PodMembershipRemoveView,
     PodMembershipCancelView,
     PodMembershipResendView,
+    ConnectionQrInviteCreateView,
+    ConnectionQrInviteClaimView,
 )
 
 urlpatterns = [
@@ -128,4 +130,16 @@ urlpatterns = [
     path("notifications/<int:notification_id>/read/", NotificationMarkReadView.as_view(), name="notification-mark-read"),
     path("notifications/<int:notification_id>/unread/", NotificationMarkUnreadView.as_view(), name="notification-mark-unread"),
     path("notifications/<int:notification_id>/resolve/", NotificationResolveView.as_view(), name="notification-resolve"),
+
+    # QR connection invites
+    path(
+        "connection-invites/qr/",
+        ConnectionQrInviteCreateView.as_view(),
+        name="connection-qr-invite-create",
+    ),
+    path(
+        "connection-invites/qr/<uuid:token>/claim/",
+        ConnectionQrInviteClaimView.as_view(),
+        name="connection-qr-invite-claim",
+    ),
 ]
