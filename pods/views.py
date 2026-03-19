@@ -28,6 +28,7 @@ from .models import (
     PodComment,
     Notification,
     ConnectionQrInvite,
+    PodQrInvite,
 )
 
 from .permissions import (
@@ -1271,6 +1272,182 @@ class PodMembershipResendView(APIView):
         )
 
         return Response(PodMembershipDetailSerializer(membership).data)    
+    
+# ------------------------------------------------------------
+# POD QR INVITES
+# ------------------------------------------------------------
+
+class PodQrInviteCreateView(APIView):
+    """
+    POST /api/pods/<pod_id>/qr/
+
+    Create or return an active QR invite for a pod.
+
+    Rules:
+    - only ACTIVE owners/admins can create a pod QR
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pod_id):
+        pod = get_object_or_404(Pod, id=pod_id)
+
+        acting_membership = PodMembership.objects.filter(
+            pod=pod,
+            user=request.user,
+            status="ACTIVE",
+        ).first()
+
+        if not acting_membership:
+            return Response(
+                {"detail": "You are not an ACTIVE member of this pod."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        if acting_membership.role not in ["OWNER", "ADMIN"]:
+            return Response(
+                {"detail": "Only pod owners or admins can create a pod QR."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        invite = PodQrInvite.objects.filter(
+            pod=pod,
+            is_active=True,
+            expires_at__gt=timezone.now(),
+        ).first()
+
+        if not invite:
+            invite = PodQrInvite.objects.create(
+                pod=pod,
+                created_by=request.user,
+            )
+
+        pod_name = getattr(pod, "name", None) or getattr(pod, "title", None) or f"Pod #{pod.id}"
+        invite_url = f"{settings.FRONTEND_URL}/pods/join/{invite.token}"
+
+        return Response(
+            {
+                "token": str(invite.token),
+                "invite_url": invite_url,
+                "expires_at": invite.expires_at,
+                "pod_id": pod.id,
+                "pod_name": pod_name,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+class PodQrInviteClaimView(APIView):
+    """
+    POST /api/pods/join/<token>/claim/
+
+    Claim a pod QR and create a standard INVITED pod membership
+    for the current user.
+
+    Rules:
+    - does not require an existing accepted connection
+    - if membership already exists:
+        ACTIVE   -> return already a member
+        INVITED  -> return already invited
+        DECLINED / LEFT / REMOVED -> revive as INVITED
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, token):
+        try:
+            parsed_token = uuid.UUID(str(token))
+        except ValueError:
+            return Response(
+                {"detail": "Invalid pod QR token."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        invite = PodQrInvite.objects.filter(
+            token=parsed_token,
+            is_active=True,
+            expires_at__gt=timezone.now(),
+        ).select_related("pod", "created_by").first()
+
+        if not invite:
+            return Response(
+                {"detail": "This pod QR is invalid or has expired."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        pod = invite.pod
+        pod_name = getattr(pod, "name", None) or getattr(pod, "title", None) or f"Pod #{pod.id}"
+
+        existing_membership = PodMembership.objects.filter(
+            pod=pod,
+            user=request.user,
+        ).first()
+
+        if existing_membership:
+            if existing_membership.status == "ACTIVE":
+                return Response(
+                    {
+                        "detail": "You are already a member of this pod.",
+                        "pod_id": pod.id,
+                        "pod_name": pod_name,
+                        "membership_id": existing_membership.id,
+                    },
+                    status=status.HTTP_200_OK,
+                )
+
+            if existing_membership.status == "INVITED":
+                return Response(
+                    {
+                        "detail": "You already have an invite to this pod.",
+                        "pod_id": pod.id,
+                        "pod_name": pod_name,
+                        "membership_id": existing_membership.id,
+                    },
+                    status=status.HTTP_200_OK,
+                )
+
+            if existing_membership.status in ["DECLINED", "LEFT", "REMOVED"]:
+                existing_membership.status = "INVITED"
+                existing_membership.role = "MEMBER"
+                existing_membership.invited_by = invite.created_by
+                existing_membership.responded_at = None
+                existing_membership.save(
+                    update_fields=["status", "role", "invited_by", "responded_at"]
+                )
+                membership = existing_membership
+            else:
+                return Response(
+                    {"detail": "This pod invite could not be created."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+        else:
+            membership = PodMembership.objects.create(
+                pod=pod,
+                user=request.user,
+                invited_by=invite.created_by,
+                status="INVITED",
+                role="MEMBER",
+            )
+
+        create_notification(
+            recipient=request.user,
+            notif_type="POD_INVITE",
+            actor=invite.created_by,
+            payload={
+                "pod_id": pod.id,
+                "pod_name": pod_name,
+                "membership_id": membership.id,
+                "target_url": "/notifications",
+            },
+        )
+
+        return Response(
+            {
+                "detail": "You now have an invite to join this pod.",
+                "pod_id": pod.id,
+                "pod_name": pod_name,
+                "membership_id": membership.id,
+            },
+            status=status.HTTP_201_CREATED,
+        )
 # ------------------------------------------------------------
 # POD GOALS
 # ------------------------------------------------------------

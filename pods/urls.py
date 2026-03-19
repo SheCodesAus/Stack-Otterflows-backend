@@ -42,6 +42,8 @@ from .views import (
     PodMembershipResendView,
     ConnectionQrInviteCreateView,
     ConnectionQrInviteClaimView,
+    PodQrInviteCreateView,
+    PodQrInviteClaimView,
 )
 
 urlpatterns = [
@@ -142,4 +144,7 @@ urlpatterns = [
         ConnectionQrInviteClaimView.as_view(),
         name="connection-qr-invite-claim",
     ),
+
+    path("pods/<int:pod_id>/qr/", PodQrInviteCreateView.as_view(), name="pod-qr-create"),
+    path("pods/join/<uuid:token>/claim/", PodQrInviteClaimView.as_view(), name="pod-qr-claim"),
 ]
