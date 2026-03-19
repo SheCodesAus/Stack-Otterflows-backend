@@ -624,11 +624,13 @@ class PodMembership(models.Model):
     responded_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
-        unique_together = [("pod", "user")]
-        indexes = [
-            models.Index(fields=["pod", "status"]),
-            models.Index(fields=["user", "status"]),
+       constraints = [
+        models.UniqueConstraint(fields=["pod", "user"], name="unique_pod_user_membership")
         ]
+       indexes = [
+        models.Index(fields=["pod", "status"]),
+        models.Index(fields=["user", "status"]),
+       ] 
 
     def accept(self):
         self.status = "ACTIVE"
@@ -643,7 +645,34 @@ class PodMembership(models.Model):
     def __str__(self):
         return f"{self.user} in {self.pod} ({self.status})"
 
+def default_pod_qr_expiry():
+    return timezone.now() + timedelta(days=14)
 
+
+class PodQrInvite(models.Model):
+    pod = models.ForeignKey(
+        Pod,
+        on_delete=models.CASCADE,
+        related_name="qr_invites",
+    )
+    created_by = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name="created_pod_qr_invites",
+    )
+    token = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField(default=default_pod_qr_expiry)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def is_expired(self):
+        return timezone.now() > self.expires_at
+
+    def __str__(self):
+        return f"{self.pod} QR invite ({self.token})"
 # ------------------------------------------------------------
 # POD GOALS
 # ------------------------------------------------------------
