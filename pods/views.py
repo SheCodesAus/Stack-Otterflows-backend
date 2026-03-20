@@ -1,4 +1,5 @@
 import uuid
+import logging
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
@@ -36,6 +37,7 @@ from .permissions import (
     is_goal_owner,
     can_view_goal,
     can_verify_individual_checkin,
+    CanUseInviteToken, 
 )
 
 from .serializers import (
@@ -65,6 +67,57 @@ from .services import (
 )
 
 User = get_user_model()
+
+# ------------------------------------------------------------
+# QR CODE GOALS
+# ------------------------------------------------------------
+
+logger = logging.getLogger(__name__)
+
+class JoinByQrView(APIView):
+    """
+    Endpoint: POST /api/join/<uuid:token>/
+    Processes a QR scan to auto-invite the user to a connection and pod.
+    """
+    permission_classes = [IsAuthenticated, CanUseInviteToken]
+
+    def post(self, request, token):
+        invite_obj = get_object_or_404(ConnectionQrInvite, token=token)
+        self.check_object_permissions(request, invite_obj)
+
+        try:
+            connection = invite_obj.execute_auto_invite(request.user)
+
+            Notification.objects.create(
+                recipient=invite_obj.owner,
+                actor=request.user,
+                notif_type="CONNECTION_ACCEPTED",
+                payload_json={
+                    "message": f"{request.user.username} joined your network via QR code.",
+                    "connection_id": connection.id,
+                },
+            )
+
+            return Response(
+                {
+                    "message": f"Successfully joined {invite_obj.owner.username}'s network and pod.",
+                    "connection_id": connection.id,
+                    "status": connection.status,
+                },
+                status=status.HTTP_201_CREATED,
+            )
+
+        except Exception:
+            logger.exception(
+                "QR join failed for user %s using token %s",
+                request.user.id,
+                token,
+            )
+            return Response(
+                {"error": "Something went wrong while processing the QR invite."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
 # ------------------------------------------------------------
 # INDIVIDUAL GOALS
 # ------------------------------------------------------------

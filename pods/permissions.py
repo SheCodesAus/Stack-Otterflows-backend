@@ -1,5 +1,6 @@
 from rest_framework.permissions import BasePermission
 from .models import PodMembership, PodCheckIn, PodGoal, Pod, GoalAssignment, Goal, CheckIn
+from django.utils import timezone
 
 def is_active_member(user, pod: Pod) -> bool:
     """
@@ -66,3 +67,15 @@ class CanVerifyPodCheckIn(BasePermission):
         if not isinstance(obj, PodCheckIn):
             return False
         return can_verify_checkin(request.user, obj)
+    
+class CanUseInviteToken(BasePermission):
+    """
+    Allows use of a QR invite token only if:
+    - the user is not the owner
+    - the token is active
+    - the token has not expired
+    """
+    def has_object_permission(self, request, view, obj):
+        if obj.owner == request.user:
+            return False
+        return obj.is_active and obj.expires_at > timezone.now()
