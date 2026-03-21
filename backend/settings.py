@@ -4,14 +4,14 @@ import os
 import dj_database_url
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-load_dotenv(str(BASE_DIR / ".env"))
+# load_dotenv(str(BASE_DIR / ".env"))
 
 # SECURITY: ACTION - move to env for production later
 # Can change to SECRET_KEY = os.getenv("DJANGO_SECRET_KEY", "django-insecure-change-me") later on in deployment. 
 SECRET_KEY = 'django-insecure-n!pimu@zk6sfr+!(=^a@3u59w9k5nf%+wwe$w1-j-i5nam7gd_'
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = os.getenv("DJANGO_DEBUG", "False").lower() == "true"
+DEBUG = os.getenv("DJANGO_DEBUG", "true").lower() == "true"
 
 ALLOWED_HOSTS = os.getenv("DJANGO_ALLOWED_HOSTS", "127.0.0.1,localhost").split(",")
 
