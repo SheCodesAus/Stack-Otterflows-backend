@@ -703,11 +703,13 @@ class PodListCreateView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self, request):
+        active_pod_ids = PodMembership.objects.filter(
+            user=request.user,
+            status="ACTIVE",
+        ).values_list("pod_id", flat=True)
+
         return (
-            Pod.objects.filter(
-                memberships__user=request.user,
-                memberships__status="ACTIVE",
-            )
+            Pod.objects.filter(id__in=active_pod_ids)
             .annotate(
                 member_count=Count(
                     "memberships",
