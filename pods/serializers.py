@@ -394,10 +394,39 @@ class PodCheckInSerializer(serializers.ModelSerializer):
         ]
 
     def validate(self, attrs):
+        pod_goal = attrs.get("pod_goal") or getattr(self.instance, "pod_goal", None)
+        period_start = attrs.get("period_start") or getattr(self.instance, "period_start", None)
+
         if self.instance and "pod_goal" in attrs and attrs["pod_goal"].id != self.instance.pod_goal_id:
             raise serializers.ValidationError(
                 "You cannot change the pod goal of an existing check-in."
             )
+
+        if not pod_goal or not period_start:
+            return attrs
+
+        today = timezone.localdate()
+
+        if pod_goal.status == "PLANNED":
+            raise serializers.ValidationError({
+                "period_start": "You cannot add a check-in for a planned pod goal."
+            })
+
+        if pod_goal.start_date and period_start < pod_goal.start_date:
+            raise serializers.ValidationError({
+                "period_start": f"Check-ins cannot be before the pod goal start date ({pod_goal.start_date})."
+            })
+
+        if pod_goal.end_date and period_start > pod_goal.end_date:
+            raise serializers.ValidationError({
+                "period_start": f"Check-ins cannot be after the pod goal end date ({pod_goal.end_date})."
+            })
+
+        if period_start > today:
+            raise serializers.ValidationError({
+                "period_start": "You cannot create a check-in for a future date."
+            })
+
         return attrs
 
 

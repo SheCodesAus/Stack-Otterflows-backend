@@ -356,11 +356,6 @@ class CheckInListCreateView(APIView):
         return Response(CheckInSerializer(checkins, many=True).data)
 
     def post(self, request):
-        print("CONTENT TYPE:", request.content_type)
-        print("REQUEST DATA:", request.data)
-        print("REQUEST FILES:", request.FILES)
-        print("REQUEST FILES:", request.FILES)
-        print("REQUEST DATA:", request.data)
         serializer = CheckInSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
@@ -373,14 +368,6 @@ class CheckInListCreateView(APIView):
             )
 
         checkin = serializer.save(created_by=request.user)
-        import os
-        print("SAVED PROOF:", checkin.proof)
-        print("SAVED PATH:", checkin.proof.path if checkin.proof else None)
-        print("FILE EXISTS:", os.path.exists(checkin.proof.path) if checkin.proof else False)
-        print("VALIDATED PROOF:", serializer.validated_data.get("proof"))
-        print("SAVED PROOF:", checkin.proof)
-        print("PROOF NAME:", checkin.proof.name if checkin.proof else None)
-        print("PROOF PATH:", checkin.proof.path if checkin.proof else None)
 
         accepted_buddies = [
             assignment.buddy
@@ -1623,11 +1610,6 @@ class PodCheckInListCreateView(APIView):
         return Response(PodCheckInSerializer(checkins, many=True).data)
 
     def post(self, request):
-        print("CONTENT TYPE:", request.content_type)
-        print("REQUEST DATA:", request.data)
-        print("REQUEST FILES:", request.FILES)
-        print("REQUEST FILES:", request.FILES)
-        print("REQUEST DATA:", request.data)
         serializer = PodCheckInSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
@@ -1640,14 +1622,6 @@ class PodCheckInListCreateView(APIView):
             )
 
         checkin = serializer.save(created_by=request.user)
-        print("VALIDATED PROOF:", serializer.validated_data.get("proof"))
-        print("SAVED PROOF:", checkin.proof)
-        print("PROOF NAME:", checkin.proof.name if checkin.proof else None)
-        print("PROOF PATH:", checkin.proof.path if checkin.proof else None)
-        import os
-        print("SAVED PROOF:", checkin.proof)
-        print("SAVED PATH:", checkin.proof.path if checkin.proof else None)
-        print("FILE EXISTS:", os.path.exists(checkin.proof.path) if checkin.proof else False)
         pod = pod_goal.pod
 
         active_reviewers = [
