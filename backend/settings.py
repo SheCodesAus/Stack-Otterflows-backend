@@ -41,6 +41,8 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles', 
+    'cloudinary_storage',
+    'cloudinary',
     'rest_framework',
     'corsheaders',
     'rest_framework.authtoken',
@@ -126,9 +128,15 @@ USE_TZ = True
 STATIC_URL = "/static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
 
+CLOUDINARY_STORAGE = {
+    "CLOUD_NAME": os.getenv("dqsqzqcna"),
+    "API_KEY": os.getenv("116938627372832"),
+    "API_SECRET": os.getenv("9uEQHyNdFDWFes5DSxmT30PVb8s"),
+}
+
 STORAGES = {
     "default": {
-        "BACKEND": "django.core.files.storage.FileSystemStorage",
+        "BACKEND": "cloudinary_storage.storage.RawMediaCloudinaryStorage",
     },
     "staticfiles": {
         "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage",
